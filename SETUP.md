@@ -1,47 +1,64 @@
-# Настройка news-digest-bot
+# Настройка новостного дайджеста
 
-## 1. Файлы в репозитории
-Загрузи всю эту структуру в свой GitHub-репозиторий, сохраняя папки:
+Бот трижды в день собирает новые посты из публичных Telegram-каналов, удаляет
+явную рекламу и повторы, а затем присылает тематическую сводку в личный чат.
 
+## Что нужно добавить в GitHub Secrets
+
+Откройте `Settings → Secrets and variables → Actions` репозитория и добавьте:
+
+| Секрет | Где взять |
+| --- | --- |
+| `TG_API_ID` | [my.telegram.org](https://my.telegram.org) |
+| `TG_API_HASH` | [my.telegram.org](https://my.telegram.org) |
+| `TG_SESSION_STRING` | локально выполнить `get_session.py` |
+| `TG_BOT_TOKEN` | @BotFather |
+| `TG_CHAT_ID` | идентификатор личного чата с ботом |
+| `GEMINI_API_KEY` | Google AI Studio |
+
+`TG_SESSION_STRING` равен доступу к Telegram-аккаунту. Не добавляйте его в
+файлы проекта, переписку или переменные, доступные другим людям.
+
+## Каналы
+
+Укажите публичные каналы в `channels.txt`, по одному на строку, например:
+
+```text
+@durov
+@example_science
 ```
-digest.py
-manage_channels.py
-get_session.py
-requirements.txt
-channels.txt
-bot_offset.json
-.github/workflows/digest.yml
-.github/workflows/manage.yml
+
+Или отправьте своему боту одну из команд:
+
+```text
+/add @channel_name
+/remove @channel_name
+/list
 ```
 
-## 2. Секреты (Settings → Secrets and variables → Actions → New repository secret)
+Новый список применяется максимум через 30 минут. На первом запуске бот берёт
+только последние 9 часов; далее он запоминает последний обработанный ID каждого
+канала, поэтому не повторяет уже просмотренные сообщения.
 
-| Имя секрета        | Значение                                  |
-|---------------------|--------------------------------------------|
-| TG_API_ID           | твой api_id с my.telegram.org              |
-| TG_API_HASH         | твой api_hash с my.telegram.org             |
-| TG_SESSION_STRING   | получишь через get_session.py (см. ниже)    |
-| TG_BOT_TOKEN        | токен от @BotFather                         |
-| TG_CHAT_ID          | твой chat_id                                |
-| GEMINI_API_KEY      | ключ из aistudio.google.com                 |
+## Расписание
 
-## 3. Получение TG_SESSION_STRING (один раз, локально)
+Дайджест запускается в 08:00, 14:00 и 20:00 по Москве. GitHub Actions иногда
+может начать задачу с небольшой задержкой — это особенность планировщика GitHub.
+Для проверки без ожидания откройте `Actions → News Digest → Run workflow`.
 
-1. Установи Python на своём компьютере, если его нет
-2. В терминале: `pip install telethon`
-3. Скачай `get_session.py` и запусти: `python get_session.py`
-4. Введи api_id, api_hash
-5. Введи номер телефона ЗАПАСНОГО аккаунта (с +, например +79991234567)
-6. Введи код, который придёт в Telegram на этот аккаунт
-7. Скопируй выведенную session string в секрет TG_SESSION_STRING
+## Что делает обработка
 
-## 4. Управление каналами
+1. Не отправляет в ИИ очевидную рекламу, промокоды, короткие посты и почти
+   дословные репосты.
+2. Разрезает большой поток на безопасные для модели части.
+3. Объединяет сообщения об одном событии и раскладывает их по темам: политика,
+   экономика, наука, технологии и ИИ, общество, здоровье.
+4. Показывает важность каждой новости и каналы-источники.
+5. Не обновляет состояние, пока сводка не создана и не доставлена в Telegram.
 
-- Отредактировать `channels.txt` вручную на GitHub (по одному @username на строку)
-- Или прямо в боте: `/add @channel`, `/remove @channel`, `/list`
-  (изменения через бота применяются в течение ~30 минут)
+## Локальная проверка
 
-## 5. Проверка работы
-
-Actions → выбрать workflow "News Digest" → Run workflow (запустить вручную,
-не дожидаясь расписания) - если всё настроено верно, придёт сообщение от бота.
+```text
+pip install -r requirements.txt
+python -m unittest discover -s tests
+```
