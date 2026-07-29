@@ -14,12 +14,12 @@ from telethon.sessions import StringSession
 
 STATE_FILE = "state.json"
 CHANNELS_FILE = "channels.txt"
-MODEL = "gemini-3.5-flash"
+MODELS = ("gemini-3.5-flash", "gemini-3.5-flash-lite")
 FIRST_RUN_LOOKBACK_HOURS = 9
 MAX_POST_CHARS = 1_800
 MAX_MODEL_INPUT_CHARS = 55_000
 MIN_TEXT_LENGTH = 45
-RETRY_ATTEMPTS = 3
+RETRY_ATTEMPTS = 4
 
 TOPICS = (
     "Политика и мир",
@@ -240,18 +240,20 @@ def extract_json(text):
 
 def generate_json(client, prompt):
     last_error = None
-    for attempt in range(RETRY_ATTEMPTS):
-        try:
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config={"response_mime_type": "application/json", "temperature": 0.15},
-            )
-            return extract_json(response.text)
-        except Exception as error:
-            last_error = error
-            if attempt < RETRY_ATTEMPTS - 1:
-                time.sleep(2 ** attempt)
+    for model in MODELS:
+        for attempt in range(RETRY_ATTEMPTS):
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config={"response_mime_type": "application/json"},
+                )
+                return extract_json(response.text)
+            except Exception as error:
+                last_error = error
+                if attempt < RETRY_ATTEMPTS - 1:
+                    time.sleep(2 ** attempt)
+        print(f"Модель {model} временно недоступна, пробуем запасную.")
     raise RuntimeError(f"Gemini did not return a valid response: {last_error}")
 
 
@@ -495,4 +497,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
