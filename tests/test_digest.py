@@ -36,10 +36,13 @@ class DigestUtilityTests(unittest.TestCase):
 
     def test_duplicate_posts_keep_all_sources(self):
         text = "Учёные представили результаты большого исследования климата в Арктике."
-        posts = filter_and_deduplicate([post(text, "@one:1"), post(text, "@two:7")])
+        posts, stats = filter_and_deduplicate(
+            [post(text, "@one:1"), post(text, "@two:7")]
+        )
         self.assertEqual(len(posts), 1)
         self.assertEqual(posts[0]["source_ids"], ["@one:1", "@two:7"])
         self.assertEqual(len(posts[0]["sources"]), 2)
+        self.assertEqual(stats["duplicates"], 1)
 
     def test_digest_is_grouped_and_shows_sources(self):
         sources = {
@@ -57,10 +60,12 @@ class DigestUtilityTests(unittest.TestCase):
                 }
             ],
             sources,
+            {"source_posts": 3, "short": 0, "ads": 1, "duplicates": 1},
         )
         self.assertIn("Наука", text)
         self.assertIn("важность 4/5", text)
         self.assertIn("@one, @two", text)
+        self.assertIn("Постов с текстом: 3", text)
 
     def test_telegram_messages_never_exceed_limit(self):
         chunks = list(telegram_chunks("слово\n" * 3_000))
