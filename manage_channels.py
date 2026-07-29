@@ -1,6 +1,7 @@
 import os
 import json
 import urllib.request
+import re
 import urllib.parse
 
 BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
@@ -17,8 +18,11 @@ def api_call(method, params=None):
         req = urllib.request.Request(url, data=data)
     else:
         req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode())
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("description", "Telegram API error"))
+    return payload["result"]
 
 
 def load_offset():
@@ -58,13 +62,14 @@ def normalize(name):
     name = name.strip()
     if not name.startswith("@"):
         name = "@" + name
+    if not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", name):
+        raise ValueError("Укажи публичный username канала, например @durov")
     return name
 
 
 def main():
     offset = load_offset()
-    result = api_call("getUpdates", {"offset": offset, "timeout": 0})
-    updates = result.get("result", [])
+    updates = api_call("getUpdates", {"offset": offset, "timeout": 0})
 
     if not updates:
         return
@@ -82,10 +87,16 @@ def main():
 
         text = msg["text"].strip()
 
-        if text.startswith("/add"):
+        command = text.split(maxsplit=1)[0].split("@", 1)[0]
+
+        if command == "/add":
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
-                ch = normalize(parts[1])
+                try:
+                    ch = normalize(parts[1])
+                except ValueError as error:
+                    send_message(str(error))
+                    continue
                 if ch not in channels:
                     channels.append(ch)
                     changed = True
@@ -95,10 +106,14 @@ def main():
             else:
                 send_message("Формат: /add @channelname")
 
-        elif text.startswith("/remove"):
+        elif command == "/remove":
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
-                ch = normalize(parts[1])
+                try:
+                    ch = normalize(parts[1])
+                except ValueError as error:
+                    send_message(str(error))
+                    continue
                 if ch in channels:
                     channels.remove(ch)
                     changed = True
@@ -108,7 +123,7 @@ def main():
             else:
                 send_message("Формат: /remove @channelname")
 
-        elif text.startswith("/list"):
+        elif command == "/list":
             if channels:
                 send_message("Текущие каналы (" + str(len(channels)) + "):\n" + "\n".join(channels))
             else:
