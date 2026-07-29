@@ -2,9 +2,9 @@ name: News Digest
 
 on:
   schedule:
-    - cron: '0 5 * * *'   # 08:00 МСК
-    - cron: '0 11 * * *'  # 14:00 МСК
-    - cron: '0 17 * * *'  # 20:00 МСК
+    - cron: '0 3 * * *'   # 08:00 Пермь (UTC+5)
+    - cron: '0 9 * * *'   # 14:00 Пермь (UTC+5)
+    - cron: '0 15 * * *'  # 20:00 Пермь (UTC+5)
   workflow_dispatch:
 
 concurrency:
