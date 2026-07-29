@@ -6,6 +6,12 @@ on:
     - cron: '0 9 * * *'   # 14:00 Пермь (UTC+5)
     - cron: '0 15 * * *'  # 20:00 Пермь (UTC+5)
   workflow_dispatch:
+    inputs:
+      replay_hours:
+        description: 'Повторно собрать новости за N последних часов (0 — только новые)'
+        required: false
+        default: '0'
+        type: string
 
 concurrency:
   group: news-digest-repository-state
@@ -40,6 +46,7 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
         run: python digest.py
 
       - name: Save state back to repo
