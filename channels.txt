@@ -1,3 +1,26 @@
 # Один канал на строку, с собачкой в начале. Строки с # игнорируются.
 # Пример:
 # @durov
+@economica
+@media1337
+@technomotel
+@whackdoor
+@technoinsider
+@banki_oil
+@TrendWatching24
+@killerfeat
+@neyroseti_dr
+@rozetkedplus
+@anton_hardin_official
+@vcnews
+@doktorgpt
+@bazabazon
+@rozetked
+@aiaiai
+@biggeekru
+@bugfeature
+@trends
+@intrendo
+@exploitex
+@bugnotfeature
+
