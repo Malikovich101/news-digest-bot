@@ -1,0 +1,29 @@
+name: Manage Channels
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-commands:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for bot commands
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python3 manage_channels.py
+
+      - name: Save channels back to repo
+        run: |
+          git config user.name "news-digest-bot"
+          git config user.email "actions@github.com"
+          git add channels.txt bot_offset.json || true
+          git diff --staged --quiet || git commit -m "Update channels [skip ci]"
+          git push
