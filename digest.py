@@ -14,7 +14,7 @@ from telethon.sessions import StringSession
 
 STATE_FILE = "state.json"
 CHANNELS_FILE = "channels.txt"
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.5-flash"
 FIRST_RUN_LOOKBACK_HOURS = 9
 MAX_POST_CHARS = 1_800
 MAX_MODEL_INPUT_CHARS = 55_000
@@ -495,3 +495,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
