@@ -162,7 +162,7 @@ def make_source_url(channel, message_id):
     return f"https://t.me/{username}/{message_id}"
 
 
-def collect_posts(client, channels, state, now):
+def collect_posts(client, channels, state, now, replay_hours=0):
     """Collect only new posts and return a state that is safe to save after delivery."""
     posts = []
     failed_channels = []
@@ -170,12 +170,18 @@ def collect_posts(client, channels, state, now):
     legacy_cutoff = parse_datetime(
         state.get("legacy_last_run"), now - timedelta(hours=FIRST_RUN_LOOKBACK_HOURS)
     )
+    replay_cutoff = now - timedelta(hours=replay_hours) if replay_hours else None
 
     for channel in channels:
         channel_state = state.get("channels", {}).get(channel, {})
-        last_message_id = int(channel_state.get("last_message_id", 0) or 0)
-        cutoff = parse_datetime(channel_state.get("last_checked_at"), legacy_cutoff)
-        newest_seen_id = last_message_id
+        saved_message_id = int(
+            channel_state.get("last_message_id", 0) or 0
+        )
+        last_message_id = 0 if replay_cutoff else saved_message_id
+        cutoff = replay_cutoff or parse_datetime(
+            channel_state.get("last_checked_at"), legacy_cutoff
+        )
+        newest_seen_id = saved_message_id
 
         try:
             for message in client.iter_messages(channel, min_id=last_message_id):
@@ -475,11 +481,23 @@ def require_environment():
         raise RuntimeError(f"Missing required secrets: {', '.join(missing)}")
 
 
+def replay_hours_from_environment():
+    raw_value = os.environ.get("REPLAY_HOURS", "0").strip()
+    try:
+        hours = int(raw_value)
+    except ValueError as error:
+        raise RuntimeError("REPLAY_HOURS must be a whole number") from error
+    if not 0 <= hours <= 72:
+        raise RuntimeError("REPLAY_HOURS must be between 0 and 72")
+    return hours
+
+
 def main():
     require_environment()
     now = utc_now()
     state = load_state()
     channels = load_channels()
+    replay_hours = replay_hours_from_environment()
     if not channels:
         raise RuntimeError("channels.txt is empty")
 
@@ -489,7 +507,7 @@ def main():
         os.environ["TG_API_HASH"],
     ) as telegram_client:
         collected, next_state, failed_channels = collect_posts(
-            telegram_client, channels, state, now
+            telegram_client, channels, state, now, replay_hours=replay_hours
         )
 
     if failed_channels and len(failed_channels) == len(channels):
@@ -509,7 +527,10 @@ def main():
     # State moves only after both AI processing and Telegram delivery succeed.
     send_telegram_message(os.environ["TG_BOT_TOKEN"], os.environ["TG_CHAT_ID"], digest)
     save_state(next_state)
-    print(f"Delivered digest: {len(collected)} posts -> {len(posts)} after filtering")
+    print(
+        f"Delivered digest: {len(collected)} posts -> {len(posts)} after filtering "
+        f"(replay_hours={replay_hours})"
+    )
 
 
 if __name__ == "__main__":
