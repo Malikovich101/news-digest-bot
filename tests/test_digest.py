@@ -1,11 +1,14 @@
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from digest import (
+    MODELS,
     collect_posts,
     filter_and_deduplicate,
     format_digest,
+    generate_json,
     is_probable_ad,
     telegram_chunks,
 )
@@ -97,6 +100,25 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertEqual(next_state["channels"]["@working"]["last_message_id"], 11)
         self.assertEqual(next_state["channels"]["@broken"]["last_message_id"], 5)
         self.assertEqual(failed, ["@broken"])
+
+    def test_model_fallback_is_used_after_temporary_failures(self):
+        class Models:
+            def __init__(self):
+                self.calls = []
+
+            def generate_content(self, model, contents, config):
+                self.calls.append(model)
+                if model == MODELS[0]:
+                    raise RuntimeError("503 UNAVAILABLE")
+                return SimpleNamespace(text='{"events": []}')
+
+        client = SimpleNamespace(models=Models())
+        with patch("digest.time.sleep"):
+            response = generate_json(client, "test")
+
+        self.assertEqual(response, {"events": []})
+        self.assertEqual(client.models.calls.count(MODELS[0]), 4)
+        self.assertEqual(client.models.calls[-1], MODELS[1])
 
 
 if __name__ == "__main__":
