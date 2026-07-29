@@ -401,13 +401,21 @@ def format_digest(events, sources, filter_stats):
     for event in events:
         grouped[event["topic"]].append(event)
 
+    filtered_posts = (
+        filter_stats["source_posts"]
+        - filter_stats["ads"]
+        - filter_stats["short"]
+        - filter_stats["duplicates"]
+    )
+
     lines = [
         "🗞 Новости за последние часы",
         (
             f"📊 Постов с текстом: {filter_stats['source_posts']}; "
-            f"явной рекламы/коротких: {filter_stats['ads'] + filter_stats['short']}; "
-            f"склеено повторов: {filter_stats['duplicates']}; "
-            f"уникальных событий: {len(events)}"
+            f"отсеяно рекламы/коротких: {filter_stats['ads'] + filter_stats['short']}; "
+            f"повторных постов: {filter_stats['duplicates']}; "
+            f"уникальных постов после фильтра: {filtered_posts}; "
+            f"событий в сводке: {len(events)}"
         ),
     ]
     for topic in TOPICS:
@@ -535,3 +543,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
