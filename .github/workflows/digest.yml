@@ -7,6 +7,10 @@ on:
     - cron: '0 17 * * *'  # 20:00 МСК
   workflow_dispatch:
 
+concurrency:
+  group: news-digest-repository-state
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -15,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - uses: actions/setup-python@v5
         with:
@@ -22,6 +28,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests
 
       - name: Run digest script
         env:
