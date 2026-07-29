@@ -66,6 +66,8 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertIn("важность 4/5", text)
         self.assertIn("@one, @two", text)
         self.assertIn("Постов с текстом: 3", text)
+        self.assertIn("уникальных постов после фильтра: 1", text)
+        self.assertIn("событий в сводке: 1", text)
 
     def test_telegram_messages_never_exceed_limit(self):
         chunks = list(telegram_chunks("слово\n" * 3_000))
@@ -156,3 +158,4 @@ class DigestUtilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
