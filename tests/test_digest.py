@@ -125,6 +125,34 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertEqual(client.models.calls.count(MODELS[0]), 4)
         self.assertEqual(client.models.calls[-1], MODELS[1])
 
+    def test_replay_reads_recent_posts_before_the_saved_watermark(self):
+        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
+
+        class Client:
+            def iter_messages(self, channel, min_id):
+                self.min_id = min_id
+                return iter(
+                    [
+                        SimpleNamespace(
+                            id=9,
+                            date=now,
+                            message="Недавняя новость, опубликованная до сохранённой отметки.",
+                        )
+                    ]
+                )
+
+        client = Client()
+        posts, _, failed = collect_posts(
+            client,
+            ["@working"],
+            {"version": 2, "channels": {"@working": {"last_message_id": 10}}},
+            now,
+            replay_hours=9,
+        )
+        self.assertEqual(client.min_id, 0)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(failed, [])
+
 
 if __name__ == "__main__":
     unittest.main()
