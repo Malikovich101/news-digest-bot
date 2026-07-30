@@ -6,6 +6,7 @@ from unittest.mock import patch
 from digest import (
     MODELS,
     collect_posts,
+    duplicate_ids_from_response,
     filter_and_deduplicate,
     format_digest,
     generate_json,
@@ -14,18 +15,15 @@ from digest import (
 )
 
 
-def post(text, source_id):
+def post(text, source_id="@test:1", url="https://t.me/test/1"):
+    channel, message_id = source_id.split(":")
     return {
-        "text": text,
+        "id": source_id,
+        "channel": channel,
+        "message_id": int(message_id),
         "date": "2026-07-30T10:00:00+00:00",
-        "source_ids": [source_id],
-        "sources": [
-            {
-                "id": source_id,
-                "channel": "@testchannel",
-                "url": "https://t.me/testchannel/1",
-            }
-        ],
+        "text": text,
+        "url": url,
     }
 
 
@@ -34,40 +32,39 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertTrue(is_probable_ad("#реклама Получите скидку по промокоду"))
         self.assertFalse(is_probable_ad("Учёные опубликовали результаты исследования"))
 
-    def test_duplicate_posts_keep_all_sources(self):
+    def test_python_removes_only_exact_text_duplicates(self):
         text = "Учёные представили результаты большого исследования климата в Арктике."
-        posts, stats = filter_and_deduplicate(
-            [post(text, "@one:1"), post(text, "@two:7")]
-        )
-        self.assertEqual(len(posts), 1)
-        self.assertEqual(posts[0]["source_ids"], ["@one:1", "@two:7"])
-        self.assertEqual(len(posts[0]["sources"]), 2)
-        self.assertEqual(stats["duplicates"], 1)
+        kept, stats = filter_and_deduplicate([post(text, "@one:1"), post(text, "@two:7")])
+        self.assertEqual([item["id"] for item in kept], ["@one:1"])
+        self.assertEqual(stats["python_duplicates"], 1)
 
-    def test_digest_is_grouped_and_shows_sources(self):
-        sources = {
-            "@one:1": {"channel": "@one", "url": "https://t.me/one/1"},
-            "@two:2": {"channel": "@two", "url": "https://t.me/two/2"},
-        }
-        text = format_digest(
+    def test_link_only_repost_is_removed(self):
+        link = "https://example.com/news/1"
+        kept, stats = filter_and_deduplicate(
             [
-                {
-                    "topic": "Наука",
-                    "title": "Новый результат",
-                    "summary": "Короткая проверенная сводка.",
-                    "importance": 4,
-                    "source_ids": ["@one:1", "@two:2"],
-                }
-            ],
-            sources,
-            {"source_posts": 3, "short": 0, "ads": 1, "duplicates": 1},
+                post(f"Подробности и исходный материал по ссылке {link}", "@one:1", link),
+                post(f"Короткий комментарий и та же ссылка на материал {link}", "@two:7", link),
+            ]
         )
-        self.assertIn("Наука", text)
-        self.assertIn("важность 4/5", text)
-        self.assertIn("@one, @two", text)
-        self.assertIn("Постов с текстом: 3", text)
-        self.assertIn("уникальных постов после фильтра: 1", text)
-        self.assertIn("событий в сводке: 1", text)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(stats["python_duplicates"], 1)
+
+    def test_model_can_remove_only_valid_duplicate_ids(self):
+        response = {"groups": [{"keep": "@one:1", "duplicates": ["@two:2", "wrong"]}]}
+        dropped = duplicate_ids_from_response(response, {"@one:1", "@two:2"})
+        self.assertEqual(dropped, {"@two:2"})
+
+    def test_digest_keeps_original_text_and_shows_clear_counts(self):
+        original = "Первая строка\n\n  Вторая строка без изменений."
+        text = format_digest(
+            [post(original, "@one:1")],
+            {"source_posts": 3, "short": 0, "ads": 1, "python_duplicates": 1},
+            semantic_duplicates=0,
+        )
+        self.assertIn(original, text)
+        self.assertIn("точных повторов: 1", text)
+        self.assertIn("смысловых повторов: 0", text)
+        self.assertIn("оригинальных публикаций: 1", text)
 
     def test_telegram_messages_never_exceed_limit(self):
         chunks = list(telegram_chunks("слово\n" * 3_000))
@@ -96,14 +93,9 @@ class DigestUtilityTests(unittest.TestCase):
                 if left != right:
                     raise AssertionError(f"{left} != {right}")
 
-        state = {
-            "version": 2,
-            "channels": {"@working": {"last_message_id": 10}, "@broken": {"last_message_id": 5}},
-        }
-        posts, next_state, failed = collect_posts(
-            Client(), ["@working", "@broken"], state, now
-        )
-        self.assertEqual(posts[0]["source_ids"], ["@working:11"])
+        state = {"version": 2, "channels": {"@working": {"last_message_id": 10}, "@broken": {"last_message_id": 5}}}
+        posts, next_state, failed = collect_posts(Client(), ["@working", "@broken"], state, now)
+        self.assertEqual(posts[0]["id"], "@working:11")
         self.assertEqual(next_state["channels"]["@working"]["last_message_id"], 11)
         self.assertEqual(next_state["channels"]["@broken"]["last_message_id"], 5)
         self.assertEqual(failed, ["@broken"])
@@ -117,43 +109,15 @@ class DigestUtilityTests(unittest.TestCase):
                 self.calls.append(model)
                 if model == MODELS[0]:
                     raise RuntimeError("503 UNAVAILABLE")
-                return SimpleNamespace(text='{"events": []}')
+                return SimpleNamespace(text='{"groups": []}')
 
         client = SimpleNamespace(models=Models())
         with patch("digest.time.sleep"):
             response = generate_json(client, "test")
 
-        self.assertEqual(response, {"events": []})
-        self.assertEqual(client.models.calls.count(MODELS[0]), 4)
+        self.assertEqual(response, {"groups": []})
+        self.assertEqual(client.models.calls.count(MODELS[0]), 2)
         self.assertEqual(client.models.calls[-1], MODELS[1])
-
-    def test_replay_reads_recent_posts_before_the_saved_watermark(self):
-        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
-
-        class Client:
-            def iter_messages(self, channel, min_id):
-                self.min_id = min_id
-                return iter(
-                    [
-                        SimpleNamespace(
-                            id=9,
-                            date=now,
-                            message="Недавняя новость, опубликованная до сохранённой отметки.",
-                        )
-                    ]
-                )
-
-        client = Client()
-        posts, _, failed = collect_posts(
-            client,
-            ["@working"],
-            {"version": 2, "channels": {"@working": {"last_message_id": 10}}},
-            now,
-            replay_hours=9,
-        )
-        self.assertEqual(client.min_id, 0)
-        self.assertEqual(len(posts), 1)
-        self.assertEqual(failed, [])
 
 
 if __name__ == "__main__":
