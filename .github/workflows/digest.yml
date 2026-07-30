@@ -2,9 +2,10 @@ name: News Digest
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # 08:00 Пермь (UTC+5)
-    - cron: '0 9 * * *'   # 14:00 Пермь (UTC+5)
-    - cron: '0 15 * * *'  # 20:00 Пермь (UTC+5)
+    # Не начало часа: GitHub чаще задерживает планировщик на пиковых отметках.
+    - cron: '5 3 * * *'   # 08:05 Пермь (UTC+5)
+    - cron: '5 9 * * *'   # 14:05 Пермь (UTC+5)
+    - cron: '5 15 * * *'  # 20:05 Пермь (UTC+5)
   workflow_dispatch:
     inputs:
       replay_hours:
@@ -56,3 +57,4 @@ jobs:
           git add state.json || true
           git diff --staged --quiet || git commit -m "Update state [skip ci]"
           git push
+
