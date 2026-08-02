@@ -1,92 +1,92 @@
 {
   "channels": {
     "@TrendWatching24": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 27254
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 27257
     },
     "@aiaiai": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 21739
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 21741
     },
     "@anton_hardin_official": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 36445
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 36448
     },
     "@banki_oil": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 51432
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 51444
     },
     "@bazabazon": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 47973
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 47980
     },
     "@biggeekru": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
       "last_message_id": 38842
     },
     "@bugfeature": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 8618
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 8621
     },
     "@bugnotfeature": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 26791
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 26795
     },
     "@doktorgpt": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 2445
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 2446
     },
     "@economica": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 26702
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 26708
     },
     "@exploitex": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 35615
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 35616
     },
     "@intrendo": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
       "last_message_id": 26703
     },
     "@killerfeat": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 18567
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 18568
     },
     "@media1337": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 27615
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 27620
     },
     "@neyroseti_dr": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
       "last_message_id": 3897
     },
     "@rozetked": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 27049
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 27051
     },
     "@rozetkedplus": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 32464
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 32466
     },
     "@technoinsider": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
       "last_message_id": 3225
     },
     "@technomotel": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 21649
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 21658
     },
     "@trends": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
       "last_message_id": 26703
     },
     "@vcnews": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 62708
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 62714
     },
     "@whackdoor": {
-      "last_checked_at": "2026-08-02T10:41:15.594890+00:00",
-      "last_message_id": 30252
+      "last_checked_at": "2026-08-02T16:10:14.250732+00:00",
+      "last_message_id": 30256
     }
   },
   "version": 2
