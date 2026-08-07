@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 0.7 seconds
+Output:
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -5,6 +8,7 @@ from unittest.mock import patch
 
 from digest import (
     MODELS,
+    candidate_clusters,
     collect_posts,
     duplicate_ids_from_response,
     filter_and_deduplicate,
@@ -53,6 +57,17 @@ class DigestUtilityTests(unittest.TestCase):
         response = {"groups": [{"keep": "@one:1", "duplicates": ["@two:2", "wrong"]}]}
         dropped = duplicate_ids_from_response(response, {"@one:1", "@two:2"})
         self.assertEqual(dropped, {"@two:2"})
+
+    def test_candidate_clusters_find_app_store_reposts(self):
+        posts = [
+            post("Telegram вновь появился в App Store, доступ к приложению восстановлен.", "@one:1"),
+            post("Telegram вернули в App Store — доступ к приложению восстановлен.", "@two:2"),
+            post("Telegram восстановили в AppStore.", "@three:3"),
+            post("Совершенно другая новость о космосе и телескопе.", "@four:4"),
+        ]
+        clusters = candidate_clusters(posts)
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual({item["id"] for item in clusters[0]}, {"@one:1", "@two:2", "@three:3"})
 
     def test_digest_keeps_original_text_and_shows_clear_counts(self):
         original = "Первая строка\n\n  Вторая строка без изменений."
