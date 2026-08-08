@@ -89,5 +89,6 @@
       "last_message_id": 30369
     }
   },
-  "version": 2
+  "delivered_ids": [],
+  "version": 3
 }
