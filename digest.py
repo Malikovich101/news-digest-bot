@@ -31,6 +31,14 @@ PROMO_MARKERS = (
     "подписывайтесь", "подпишитесь", "розыгрыш", "скидка",
     "купить", "заказать", "регистрируйтесь",
 )
+PROMO_PATTERNS = (
+    r"\bподпис\w*\b",
+    r"\bрозыгрыш\w*\b",
+    r"\bскидк\w*\b",
+    r"\bкуп\w*\b",
+    r"\bзаказ\w*\b",
+    r"\bрегистр\w*\b",
+)
 URL_RE = re.compile(r"https?://\S+|t\.me/\S+", re.IGNORECASE)
 WORD_RE = re.compile(r"[a-zа-яё0-9]{3,}", re.IGNORECASE)
 COMMON_WORDS = {
@@ -143,7 +151,9 @@ def has_ad_marker(text):
 
 def is_suspicious_ad(text):
     normalized = analysis_text(text).lower()
-    return not has_ad_marker(normalized) and any(marker in normalized for marker in PROMO_MARKERS)
+    if has_ad_marker(normalized):
+        return False
+    return any(re.search(pattern, normalized) for pattern in PROMO_PATTERNS)
 
 
 def is_probable_ad(text):
@@ -391,139 +401,39 @@ def semantic_deduplicate(client, posts):
     return final_posts, len(dropped) + final_count
 
 
-def format_post_time(value):
-    parsed = datetime.fromisoformat(value)
-    return parsed.astimezone(PERM_TIMEZONE).strftime("%d.%m %H:%M")
+def telegram_chunks(text, limit=3900):
+    chunks = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(current) + len(line) <= limit:
+            current += line
+            continue
+        if current:
+            chunks.append(current.rstrip())
+            current = ""
+        while len(line) > limit:
+            chunks.append(line[:limit].rstrip())
+            line = line[limit:]
+        current = line
+    if current:
+        chunks.append(current.rstrip())
+    return chunks
 
 
-def format_digest(posts, stats, semantic_duplicates, confirmed_ads=0, ai_unavailable=False):
-    lines = [
-        "🗞 Оригинальные новости",
-        (
-            f"📊 Постов с текстом: {stats['source_posts']}; "
-            f"явной рекламы: {stats['ads']}; "
-            f"проверено Gemini: {stats.get('ad_review', 0)}; "
-            f"рекламы подтверждено Gemini: {confirmed_ads}; "
-            f"отсеяно коротких: {stats['short']}; "
-            f"точных повторов: {stats['python_duplicates']}; "
-            f"смысловых повторов: {semantic_duplicates}; "
-            f"оригинальных публикаций: {len(posts)}"
-        ),
-        "Каждый текст ниже — оригинальный пост канала, без пересказа и сокращения.",
-    ]
-    if ai_unavailable:
-        lines.append("⚠️ Gemini был недоступен: сомнительные рекламные посты оставлены, чтобы не потерять новости.")
+def send_telegram_message(token, chat_id, text):
+    response = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+        timeout=30,
+    )
+    response.raise_for_status()
+
+
+def format_digest(posts):
+    lines = ["📰 Новости", ""]
     for post in posts:
-        lines.extend(["", "────────────", f"🕒 {format_post_time(post['date'])} · {post['channel']}", post["text"], f"Источник: {post['url']}"])
+        preview = analysis_text(post["text"])[:MAX_PREVIEW_CHARS]
+        lines.append(f"• {preview}")
+        lines.append(post["url"])
+        lines.append("")
     return "\n".join(lines).strip()
-
-
-def telegram_chunks(text, limit=3800):
-    while text:
-        if len(text) <= limit:
-            yield text
-            return
-        boundary = text.rfind("\n────────────", 0, limit)
-        if boundary < limit // 2:
-            boundary = text.rfind("\n", 0, limit)
-        if boundary < limit // 2:
-            boundary = limit
-        yield text[:boundary].rstrip()
-        text = text[boundary:].lstrip()
-
-
-def send_telegram_message(token, chat_id, text, state=None, posts=None):
-    chunks = list(telegram_chunks(text))
-    for index, chunk in enumerate(chunks):
-        last_error = None
-        for attempt in range(RETRY_ATTEMPTS):
-            try:
-                response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": chunk}, timeout=30)
-                response.raise_for_status()
-                payload = response.json()
-                if not payload.get("ok"):
-                    raise requests.RequestException(payload.get("description", "Telegram API rejected the message"))
-                break
-            except requests.RequestException as error:
-                last_error = error
-                if attempt < RETRY_ATTEMPTS - 1:
-                    time.sleep(2 ** attempt)
-        else:
-            raise RuntimeError(f"Telegram delivery failed on chunk {index + 1}/{len(chunks)}: {last_error}")
-        if state is not None and posts is not None:
-            delivered = set(state.get("delivered_ids", []))
-            for post in posts:
-                if f"Источник: {post['url']}" in chunk:
-                    delivered.add(post["id"])
-            state["delivered_ids"] = list(delivered)[-MAX_DELIVERED_IDS:]
-            save_state(state)
-
-
-def require_environment():
-    required = ("TG_API_ID", "TG_API_HASH", "TG_SESSION_STRING", "TG_BOT_TOKEN", "TG_CHAT_ID", "GEMINI_API_KEY")
-    missing = [name for name in required if not os.environ.get(name)]
-    if missing:
-        raise RuntimeError(f"Missing required secrets: {', '.join(missing)}")
-
-
-def replay_hours_from_environment():
-    raw_value = os.environ.get("REPLAY_HOURS", "0").strip()
-    try:
-        hours = int(raw_value)
-    except ValueError as error:
-        raise RuntimeError("REPLAY_HOURS must be a whole number") from error
-    if not 0 <= hours <= 72:
-        raise RuntimeError("REPLAY_HOURS must be between 0 and 72")
-    return hours
-
-
-def main():
-    require_environment()
-    now = utc_now()
-    state = load_state()
-    channels = load_channels()
-    replay_hours = replay_hours_from_environment()
-    if not channels:
-        raise RuntimeError("channels.txt is empty")
-
-    with TelegramClient(StringSession(os.environ["TG_SESSION_STRING"]), int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as telegram_client:
-        collected, next_state, failed_channels = collect_posts(telegram_client, channels, state, now, replay_hours=replay_hours)
-
-    if failed_channels and len(failed_channels) == len(channels):
-        raise RuntimeError("All configured channels failed to load")
-
-    collected.sort(key=lambda post: post["date"], reverse=True)
-    posts, stats = filter_and_deduplicate(collected)
-    ai_unavailable = False
-    confirmed_ads = 0
-    semantic_duplicates = 0
-
-    if posts:
-        try:
-            gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-            posts, confirmed_ads = review_suspicious_ads(gemini_client, posts)
-            posts, semantic_duplicates = semantic_deduplicate(gemini_client, posts)
-        except RuntimeError as error:
-            ai_unavailable = True
-            print(f"Gemini unavailable, sending without AI filtering: {error}")
-
-    digest = format_digest(posts, stats, semantic_duplicates, confirmed_ads, ai_unavailable)
-    if not posts and not ai_unavailable:
-        digest = "🗞 За этот период новых подходящих новостей не было."
-    if failed_channels:
-        digest += "\n\n⚠️ Не удалось проверить: " + ", ".join(failed_channels)
-
-    send_telegram_message(os.environ["TG_BOT_TOKEN"], os.environ["TG_CHAT_ID"], digest, state=state, posts=posts)
-
-    if replay_hours == 0:
-        next_state["delivered_ids"] = state.get("delivered_ids", [])
-        save_state(next_state)
-    else:
-        state["delivered_ids"] = []
-        save_state(state)
-
-    print(f"Delivered {len(posts)} original posts from {len(collected)} collected (semantic_duplicates={semantic_duplicates}, confirmed_ads={confirmed_ads}, replay_hours={replay_hours})")
-
-
-if __name__ == "__main__":
-    main()
