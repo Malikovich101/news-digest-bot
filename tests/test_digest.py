@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import requests
+
 from digest import (
     MODELS,
     ad_ids_from_response,
@@ -135,7 +137,7 @@ class DigestUtilityTests(unittest.TestCase):
         def fail_on_second(url, data, timeout):
             calls.append(data["text"])
             if len(calls) == 2:
-                raise OSError("network unavailable")
+                raise requests.ConnectionError("network unavailable")
             return Response()
 
         with patch("digest.requests.post", side_effect=fail_on_second), patch("digest.time.sleep"):
