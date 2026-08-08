@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.7 seconds
-Output:
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -86,27 +83,22 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertTrue(chunks)
         self.assertTrue(all(len(chunk) <= 3800 for chunk in chunks))
 
-    def test_message_watermark_moves_only_for_a_successful_channel(self):
+    def test_watermark_moves_only_for_a_successful_channel(self):
         now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
 
         class Client:
             def iter_messages(self, channel, min_id):
                 if channel == "@broken":
                     raise OSError("network unavailable")
-                self.assertEqual(min_id, 10)
-                return iter(
-                    [
-                        SimpleNamespace(
-                            id=11,
-                            date=now,
-                            message="Проверенная новость с достаточным количеством текста.",
-                        )
-                    ]
-                )
-
-            def assertEqual(self, left, right):
-                if left != right:
-                    raise AssertionError(f"{left} != {right}")
+                if min_id != 10:
+                    raise AssertionError(f"{min_id} != 10")
+                return iter([
+                    SimpleNamespace(
+                        id=11,
+                        date=now,
+                        message="Проверенная новость с достаточным количеством текста.",
+                    )
+                ])
 
         state = {"version": 2, "channels": {"@working": {"last_message_id": 10}, "@broken": {"last_message_id": 5}}}
         posts, next_state, failed = collect_posts(Client(), ["@working", "@broken"], state, now)
@@ -115,13 +107,60 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertEqual(next_state["channels"]["@broken"]["last_message_id"], 5)
         self.assertEqual(failed, ["@broken"])
 
+    def test_failed_channel_does_not_leak_partial_posts(self):
+        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
+
+        class Client:
+            def iter_messages(self, channel, min_id):
+                def broken():
+                    yield SimpleNamespace(
+                        id=11,
+                        date=now,
+                        message="Частично прочитанная новость, которую нельзя считать доставленной.",
+                    )
+                    raise OSError("network unavailable")
+                return broken()
+
+        state = {"version": 2, "channels": {"@broken": {"last_message_id": 10}}}
+        posts, next_state, failed = collect_posts(Client(), ["@broken"], state, now)
+        self.assertEqual(posts, [])
+        self.assertEqual(next_state["channels"]["@broken"]["last_message_id"], 10)
+        self.assertEqual(failed, ["@broken"])
+
+    def test_delivered_id_is_not_recollected_on_normal_run(self):
+        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
+
+        class Client:
+            def iter_messages(self, channel, min_id):
+                return iter([
+                    SimpleNamespace(id=11, date=now, message="Уже доставленная новость не должна прийти повторно."),
+                    SimpleNamespace(id=12, date=now, message="Новая новость должна попасть в следующий дайджест."),
+                ])
+
+        state = {"version": 3, "channels": {"@test": {"last_message_id": 10}}, "delivered_ids": ["@test:11"]}
+        posts, _, failed = collect_posts(Client(), ["@test"], state, now)
+        self.assertEqual([item["id"] for item in posts], ["@test:12"])
+        self.assertEqual(failed, [])
+
+    def test_replay_does_not_use_delivered_id_filter(self):
+        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
+
+        class Client:
+            def iter_messages(self, channel, min_id):
+                return iter([SimpleNamespace(id=11, date=now, message="Эту новость нужно повторно собрать в режиме replay.")])
+
+        state = {"version": 3, "channels": {"@test": {"last_message_id": 10}}, "delivered_ids": ["@test:11"]}
+        posts, _, failed = collect_posts(Client(), ["@test"], state, now, replay_hours=1)
+        self.assertEqual([item["id"] for item in posts], ["@test:11"])
+        self.assertEqual(failed, [])
+
     def test_model_fallback_is_used_after_temporary_failures(self):
         class Models:
             def __init__(self):
                 self.calls = []
 
             def generate_content(self, model, contents, config):
-                self.calls.append(model)
+                self.calls.append((model, config))
                 if model == MODELS[0]:
                     raise RuntimeError("503 UNAVAILABLE")
                 return SimpleNamespace(text='{"groups": []}')
@@ -131,10 +170,10 @@ class DigestUtilityTests(unittest.TestCase):
             response = generate_json(client, "test")
 
         self.assertEqual(response, {"groups": []})
-        self.assertEqual(client.models.calls.count(MODELS[0]), 2)
-        self.assertEqual(client.models.calls[-1], MODELS[1])
+        self.assertEqual([model for model, _ in client.models.calls].count(MODELS[0]), 2)
+        self.assertEqual(client.models.calls[-1][0], MODELS[1])
+        self.assertNotIn("temperature", client.models.calls[-1][1])
 
 
 if __name__ == "__main__":
     unittest.main()
-
