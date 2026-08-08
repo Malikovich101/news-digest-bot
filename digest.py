@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.7 seconds
-Output:
 import json
 import os
 import re
@@ -24,24 +21,15 @@ MAX_PREVIEW_CHARS = 700
 MAX_MODEL_INPUT_CHARS = 48_000
 RETRY_ATTEMPTS = 2
 PERM_TIMEZONE = timezone(timedelta(hours=5))
+MAX_DELIVERED_IDS = 2_000
 
 AD_MARKERS = (
-    "#реклама",
-    "erid",
-    "промокод",
-    "рекламная интеграция",
-    "на правах рекламы",
-    "партнёрский материал",
-    "партнерский материал",
+    "#реклама", "erid", "промокод", "рекламная интеграция",
+    "на правах рекламы", "партнёрский материал", "партнерский материал",
 )
 PROMO_MARKERS = (
-    "подписывайтесь",
-    "подпишитесь",
-    "розыгрыш",
-    "скидка",
-    "купить",
-    "заказать",
-    "регистрируйтесь",
+    "подписывайтесь", "подпишитесь", "розыгрыш", "скидка",
+    "купить", "заказать", "регистрируйтесь",
 )
 URL_RE = re.compile(r"https?://\S+|t\.me/\S+", re.IGNORECASE)
 WORD_RE = re.compile(r"[a-zа-яё0-9]{3,}", re.IGNORECASE)
@@ -69,20 +57,27 @@ def load_channels():
 
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return {"version": 2, "channels": {}}
+        return {"version": 3, "channels": {}, "delivered_ids": []}
     with open(STATE_FILE, "r", encoding="utf-8") as file:
         state = json.load(file)
     return {
-        "version": 2,
+        "version": 3,
         "channels": state.get("channels", {}),
+        "delivered_ids": list(state.get("delivered_ids", []))[-MAX_DELIVERED_IDS:],
         "legacy_last_run": state.get("last_run"),
     }
 
 
 def save_state(state):
     state.pop("legacy_last_run", None)
-    with open(STATE_FILE, "w", encoding="utf-8") as file:
-        json.dump(state, file, ensure_ascii=False, indent=2, sort_keys=True)
+    state["version"] = 3
+    state["delivered_ids"] = list(dict.fromkeys(state.get("delivered_ids", [])))[-MAX_DELIVERED_IDS:]
+    temp_file = STATE_FILE + ".tmp"
+    with open(temp_file, "w", encoding="utf-8") as output:
+        json.dump(state, output, ensure_ascii=False, indent=2, sort_keys=True)
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(temp_file, STATE_FILE)
 
 
 def parse_datetime(value, fallback):
@@ -96,20 +91,16 @@ def parse_datetime(value, fallback):
 
 
 def analysis_text(text):
-    """Normalise only a disposable copy used for filtering and AI comparison."""
     return re.sub(r"\s+", " ", text or "").strip()
 
 
 def comparison_tokens(text):
-    """Create a rough, inexpensive similarity signal before asking Gemini."""
     normalized = analysis_text(text).lower()
     normalized = re.sub(r"app\s*store", "appstore", normalized)
     tokens = set()
     for word in WORD_RE.findall(URL_RE.sub(" ", normalized)):
         if word in COMMON_WORDS:
             continue
-        # The first five letters safely join common Russian word forms, for example
-        # "восстановлен" and "восстановили", without deciding that they are duplicates.
         tokens.add(word[:5] if len(word) > 5 else word)
     return tokens
 
@@ -125,7 +116,6 @@ def are_duplicate_candidates(left, right):
 
 
 def candidate_clusters(posts):
-    """Return small groups worth Gemini's close attention; this removes nothing."""
     parents = list(range(len(posts)))
 
     def find(index):
@@ -169,10 +159,14 @@ def make_source_url(channel, message_id):
 
 
 def collect_posts(client, channels, state, now, replay_hours=0):
-    """Read new posts, retaining the original Telegram text unchanged."""
     posts = []
     failed_channels = []
-    next_state = {"version": 2, "channels": dict(state.get("channels", {}))}
+    next_state = {
+        "version": 3,
+        "channels": dict(state.get("channels", {})),
+        "delivered_ids": list(state.get("delivered_ids", [])),
+    }
+    delivered_ids = set(state.get("delivered_ids", []))
     legacy_cutoff = parse_datetime(
         state.get("legacy_last_run"), now - timedelta(hours=FIRST_RUN_LOOKBACK_HOURS)
     )
@@ -186,32 +180,33 @@ def collect_posts(client, channels, state, now, replay_hours=0):
             channel_state.get("last_checked_at"), legacy_cutoff
         )
         newest_seen_id = saved_message_id
+        channel_posts = []
 
         try:
             for message in client.iter_messages(channel, min_id=min_id):
-                # Telethon yields newest first. On a first run we do not need older history.
                 if not min_id and message.date <= cutoff:
                     break
                 newest_seen_id = max(newest_seen_id, message.id)
                 if not message.message:
                     continue
-                posts.append(
-                    {
-                        "id": f"{channel}:{message.id}",
-                        "channel": channel,
-                        "message_id": message.id,
-                        "date": message.date.isoformat(),
-                        "text": message.message,
-                        "url": make_source_url(channel, message.id),
-                    }
-                )
+                post = {
+                    "id": f"{channel}:{message.id}",
+                    "channel": channel,
+                    "message_id": message.id,
+                    "date": message.date.isoformat(),
+                    "text": message.message,
+                    "url": make_source_url(channel, message.id),
+                }
+                if not replay_cutoff and post["id"] in delivered_ids:
+                    continue
+                channel_posts.append(post)
 
+            posts.extend(channel_posts)
             next_state["channels"][channel] = {
                 "last_message_id": newest_seen_id,
                 "last_checked_at": now.isoformat(),
             }
         except Exception as error:
-            # Its previous watermark remains intact, so the next run retries this channel.
             failed_channels.append(channel)
             print(f"Не удалось прочитать {channel}: {error}")
 
@@ -219,16 +214,10 @@ def collect_posts(client, channels, state, now, replay_hours=0):
 
 
 def filter_and_deduplicate(posts):
-    """Remove only empty posts, clear ads, exact copies and link-only reposts."""
     kept = []
     seen_text = set()
     seen_link_posts = set()
-    stats = {
-        "source_posts": len(posts),
-        "short": 0,
-        "ads": 0,
-        "python_duplicates": 0,
-    }
+    stats = {"source_posts": len(posts), "short": 0, "ads": 0, "python_duplicates": 0}
 
     for post in posts:
         comparable = analysis_text(post["text"])
@@ -273,7 +262,7 @@ def generate_json(client, prompt):
                 response = client.models.generate_content(
                     model=model,
                     contents=prompt,
-                    config={"response_mime_type": "application/json", "temperature": 0},
+                    config={"response_mime_type": "application/json"},
                 )
                 return extract_json_object(response.text)
             except Exception as error:
@@ -285,10 +274,7 @@ def generate_json(client, prompt):
 
 
 def model_item(post, text_limit):
-    return {
-        "id": post["id"],
-        "text": analysis_text(post["text"])[:text_limit],
-    }
+    return {"id": post["id"], "text": analysis_text(post["text"])[:text_limit]}
 
 
 def make_ai_batches(posts, text_limit, overlap=0):
@@ -299,8 +285,8 @@ def make_ai_batches(posts, text_limit, overlap=0):
             batches.append(current)
             current = current[-overlap:] if overlap else []
             current_size = sum(
-                len(json.dumps(model_item(item, text_limit), ensure_ascii=False))
-                for item in current
+                len(json.dumps(model_item(item, text_limit), ensure_ascii=False)
+                ) for item in current
             )
         current.append(post)
         current_size += item_size
@@ -319,10 +305,6 @@ def duplicate_prompt(posts, text_limit):
 истории или сообщения с разными фактами. Если есть сомнение, не считай их дублями. Но если
 несколько каналов сообщают об одном факте разными словами, ОБЯЗАТЕЛЬНО включи все такие
 повторы в одну группу. В каждой группе выбери наиболее полный оригинальный пост.
-
-Пример: «Telegram вновь появился в App Store, доступ восстановлен» и «Telegram вернули в
-App Store — доступ к приложению восстановлен» — это один сюжет, даже если один пост короче.
-Если таких постов четыре, в duplicates должны попасть все три невыбранных id.
 
 Верни только JSON строго такого вида:
 {{"groups":[{{"keep":"id полного поста","duplicates":["id повтора 1","id повтора 2"]}}]}}
@@ -348,8 +330,7 @@ def duplicate_ids_from_response(response, allowed_ids):
         if keep not in allowed_ids or not isinstance(duplicates, list):
             continue
         valid_duplicates = [
-            item
-            for item in duplicates
+            item for item in duplicates
             if item in allowed_ids and item != keep and item not in used
         ]
         if not valid_duplicates or keep in used:
@@ -374,9 +355,6 @@ def semantic_deduplication_pass(client, posts, text_limit, overlap=0):
 
 
 def semantic_deduplicate(client, posts):
-    """Use AI strictly as a conservative duplicate detector, never as a writer."""
-    # First show Gemini compact, lexical candidate clusters. The model can then
-    # compare every suspected duplicate instead of overlooking it in a huge feed.
     dropped = set()
     for cluster in candidate_clusters(posts):
         active = [post for post in cluster if post["id"] not in dropped]
@@ -386,10 +364,8 @@ def semantic_deduplicate(client, posts):
         dropped.update(
             duplicate_ids_from_response(response, {post["id"] for post in active})
         )
-    focused_posts = [post for post in posts if post["id"] not in dropped]
 
-    # A broader pass still catches paraphrases with little lexical overlap and
-    # comparisons across different candidate clusters.
+    focused_posts = [post for post in posts if post["id"] not in dropped]
     final_posts, final_count = semantic_deduplication_pass(
         client, focused_posts, MAX_PREVIEW_CHARS, overlap=20
     )
@@ -417,15 +393,12 @@ def format_digest(posts, stats, semantic_duplicates, ai_unavailable=False):
         lines.append("⚠️ Gemini был недоступен: отправлены все посты после базовой фильтрации.")
 
     for post in posts:
-        lines.extend(
-            [
-                "",
-                "────────────",
-                f"🕒 {format_post_time(post['date'])} · {post['channel']}",
-                post["text"],
-                f"Источник: {post['url']}",
-            ]
-        )
+        lines.extend([
+            "", "────────────",
+            f"🕒 {format_post_time(post['date'])} · {post['channel']}",
+            post["text"],
+            f"Источник: {post['url']}",
+        ])
     return "\n".join(lines).strip()
 
 
@@ -443,14 +416,17 @@ def telegram_chunks(text, limit=3800):
         text = text[boundary:].lstrip()
 
 
-def send_telegram_message(token, chat_id, text):
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    for chunk in telegram_chunks(text):
+def send_telegram_message(token, chat_id, text, state=None, posts=None):
+    """Send chunks with checkpoints so a partial failure does not lose progress."""
+    chunks = list(telegram_chunks(text))
+    for index, chunk in enumerate(chunks):
         last_error = None
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 response = requests.post(
-                    url, data={"chat_id": chat_id, "text": chunk}, timeout=30
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    data={"chat_id": chat_id, "text": chunk},
+                    timeout=30,
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -464,17 +440,23 @@ def send_telegram_message(token, chat_id, text):
                 if attempt < RETRY_ATTEMPTS - 1:
                     time.sleep(2 ** attempt)
         else:
-            raise RuntimeError(f"Telegram delivery failed: {last_error}")
+            raise RuntimeError(
+                f"Telegram delivery failed on chunk {index + 1}/{len(chunks)}: {last_error}"
+            )
+
+        if state is not None and posts is not None:
+            delivered = set(state.get("delivered_ids", []))
+            for post in posts:
+                if f"Источник: {post['url']}" in chunk:
+                    delivered.add(post["id"])
+            state["delivered_ids"] = list(delivered)[-MAX_DELIVERED_IDS:]
+            save_state(state)
 
 
 def require_environment():
     required = (
-        "TG_API_ID",
-        "TG_API_HASH",
-        "TG_SESSION_STRING",
-        "TG_BOT_TOKEN",
-        "TG_CHAT_ID",
-        "GEMINI_API_KEY",
+        "TG_API_ID", "TG_API_HASH", "TG_SESSION_STRING",
+        "TG_BOT_TOKEN", "TG_CHAT_ID", "GEMINI_API_KEY",
     )
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
@@ -517,13 +499,12 @@ def main():
     posts, stats = filter_and_deduplicate(collected)
     ai_unavailable = False
     semantic_duplicates = 0
+
     if posts:
         try:
             gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
             posts, semantic_duplicates = semantic_deduplicate(gemini_client, posts)
         except RuntimeError as error:
-            # Delivery must not depend on Gemini. A temporary model outage means
-            # possible extra duplicates, never lost original news.
             ai_unavailable = True
             print(f"Gemini unavailable, sending without semantic de-duplication: {error}")
 
@@ -534,9 +515,21 @@ def main():
     if failed_channels:
         digest += "\n\n⚠️ Не удалось проверить: " + ", ".join(failed_channels)
 
-    # State moves only after Telegram delivery succeeds.
-    send_telegram_message(os.environ["TG_BOT_TOKEN"], os.environ["TG_CHAT_ID"], digest)
-    save_state(next_state)
+    send_telegram_message(
+        os.environ["TG_BOT_TOKEN"],
+        os.environ["TG_CHAT_ID"],
+        digest,
+        state=state,
+        posts=posts,
+    )
+
+    if replay_hours == 0:
+        next_state["delivered_ids"] = state.get("delivered_ids", [])
+        save_state(next_state)
+    else:
+        state["delivered_ids"] = []
+        save_state(state)
+
     print(
         f"Delivered {len(posts)} original posts from {len(collected)} collected "
         f"(semantic_duplicates={semantic_duplicates}, replay_hours={replay_hours})"
@@ -545,4 +538,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
