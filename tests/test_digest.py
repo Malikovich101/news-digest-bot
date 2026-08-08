@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from digest import (
     MODELS,
+    ad_ids_from_response,
     candidate_clusters,
     collect_posts,
     duplicate_ids_from_response,
@@ -12,6 +13,8 @@ from digest import (
     format_digest,
     generate_json,
     is_probable_ad,
+    is_suspicious_ad,
+    review_suspicious_ads,
     telegram_chunks,
 )
 
@@ -29,9 +32,36 @@ def post(text, source_id="@test:1", url="https://t.me/test/1"):
 
 
 class DigestUtilityTests(unittest.TestCase):
-    def test_obvious_ad_is_filtered(self):
+    def test_explicit_ad_is_filtered_without_ai(self):
         self.assertTrue(is_probable_ad("#реклама Получите скидку по промокоду"))
         self.assertFalse(is_probable_ad("Учёные опубликовали результаты исследования"))
+
+    def test_promo_words_are_suspicious_not_deterministic_ads(self):
+        text = "Компания объявила скидку на билеты после изменения цен."
+        self.assertTrue(is_suspicious_ad(text))
+        kept, stats = filter_and_deduplicate([post(text)])
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(stats["ads"], 0)
+        self.assertEqual(stats["ad_review"], 1)
+
+    def test_gemini_can_remove_only_confirmed_ads(self):
+        posts = [
+            post("Купите курс со скидкой 50% прямо сейчас!", "@one:1"),
+            post("Компания снизила цены на лекарства, пациенты получат помощь дешевле.", "@two:2"),
+        ]
+
+        class Models:
+            def generate_content(self, model, contents, config):
+                return SimpleNamespace(text='{"ads":["@one:1"]}')
+
+        client = SimpleNamespace(models=Models())
+        kept, confirmed = review_suspicious_ads(client, posts)
+        self.assertEqual([item["id"] for item in kept], ["@two:2"])
+        self.assertEqual(confirmed, 1)
+
+    def test_ad_response_accepts_only_known_ids(self):
+        response = {"ads": ["@one:1", "wrong", 123]}
+        self.assertEqual(ad_ids_from_response(response, {"@one:1", "@two:2"}), {"@one:1"})
 
     def test_python_removes_only_exact_text_duplicates(self):
         text = "Учёные представили результаты большого исследования климата в Арктике."
@@ -41,12 +71,10 @@ class DigestUtilityTests(unittest.TestCase):
 
     def test_link_only_repost_is_removed(self):
         link = "https://example.com/news/1"
-        kept, stats = filter_and_deduplicate(
-            [
-                post(f"Подробности и исходный материал по ссылке {link}", "@one:1", link),
-                post(f"Короткий комментарий и та же ссылка на материал {link}", "@two:7", link),
-            ]
-        )
+        kept, stats = filter_and_deduplicate([
+            post(f"Подробности и исходный материал по ссылке {link}", "@one:1", link),
+            post(f"Короткий комментарий и та же ссылка на материал {link}", "@two:7", link),
+        ])
         self.assertEqual(len(kept), 1)
         self.assertEqual(stats["python_duplicates"], 1)
 
@@ -70,10 +98,14 @@ class DigestUtilityTests(unittest.TestCase):
         original = "Первая строка\n\n  Вторая строка без изменений."
         text = format_digest(
             [post(original, "@one:1")],
-            {"source_posts": 3, "short": 0, "ads": 1, "python_duplicates": 1},
+            {"source_posts": 3, "short": 0, "ads": 1, "ad_review": 2, "python_duplicates": 1},
             semantic_duplicates=0,
+            confirmed_ads=1,
         )
         self.assertIn(original, text)
+        self.assertIn("явной рекламы: 1", text)
+        self.assertIn("проверено Gemini: 2", text)
+        self.assertIn("рекламы подтверждено Gemini: 1", text)
         self.assertIn("точных повторов: 1", text)
         self.assertIn("смысловых повторов: 0", text)
         self.assertIn("оригинальных публикаций: 1", text)
@@ -92,13 +124,7 @@ class DigestUtilityTests(unittest.TestCase):
                     raise OSError("network unavailable")
                 if min_id != 10:
                     raise AssertionError(f"{min_id} != 10")
-                return iter([
-                    SimpleNamespace(
-                        id=11,
-                        date=now,
-                        message="Проверенная новость с достаточным количеством текста.",
-                    )
-                ])
+                return iter([SimpleNamespace(id=11, date=now, message="Проверенная новость с достаточным количеством текста.")])
 
         state = {"version": 2, "channels": {"@working": {"last_message_id": 10}, "@broken": {"last_message_id": 5}}}
         posts, next_state, failed = collect_posts(Client(), ["@working", "@broken"], state, now)
@@ -113,11 +139,7 @@ class DigestUtilityTests(unittest.TestCase):
         class Client:
             def iter_messages(self, channel, min_id):
                 def broken():
-                    yield SimpleNamespace(
-                        id=11,
-                        date=now,
-                        message="Частично прочитанная новость, которую нельзя считать доставленной.",
-                    )
+                    yield SimpleNamespace(id=11, date=now, message="Частично прочитанная новость, которую нельзя считать доставленной.")
                     raise OSError("network unavailable")
                 return broken()
 
