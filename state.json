@@ -1,13 +1,6 @@
 {
   "channels": {},
-  "delivered_chunks": [
-    "64ff32b4d1d44538a5a4bdae43df012d34564688a71ae6f986b51d5cbfc44b73",
-    "08a0b7b929541c122b28272c0ac27719c80b39040a382edc7c40be063b01acb6",
-    "dcdb704109a454784b81229d2b05f368692e758bfa33cb61d04c1b93791b0273"
-  ],
-  "delivered_ids": [
-    "@one:1",
-    "@two:2"
-  ],
+  "delivered_chunks": [],
+  "delivered_ids": [],
   "version": 4
 }
