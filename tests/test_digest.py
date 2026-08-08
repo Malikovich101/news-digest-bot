@@ -15,6 +15,7 @@ from digest import (
     is_probable_ad,
     is_suspicious_ad,
     review_suspicious_ads,
+    send_telegram_message,
     telegram_chunks,
 )
 
@@ -114,6 +115,42 @@ class DigestUtilityTests(unittest.TestCase):
         chunks = list(telegram_chunks("слово\n" * 3_000))
         self.assertTrue(chunks)
         self.assertTrue(all(len(chunk) <= 3800 for chunk in chunks))
+
+    def test_telegram_checkpoint_resumes_after_partial_chunk_failure(self):
+        first = "A" * 3790
+        second = "B" * 3790
+        text = first + "\n────────────\n" + second
+        posts = [post(first, "@one:1"), post(second, "@two:2")]
+        state = {"version": 4, "channels": {}, "delivered_ids": [], "delivered_chunks": []}
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True}
+
+        calls = []
+
+        def fail_on_second(url, data, timeout):
+            calls.append(data["text"])
+            if len(calls) == 2:
+                raise OSError("network unavailable")
+            return Response()
+
+        with patch("digest.requests.post", side_effect=fail_on_second), patch("digest.time.sleep"):
+            with self.assertRaises(RuntimeError):
+                send_telegram_message("token", "chat", text, state=state, posts=posts)
+
+        self.assertEqual(len(state["delivered_chunks"]), 1)
+        self.assertEqual(state["delivered_ids"], [])
+
+        calls.clear()
+        with patch("digest.requests.post", return_value=Response()) as send_mock:
+            send_telegram_message("token", "chat", text, state=state, posts=posts)
+
+        self.assertEqual(send_mock.call_count, 1)
+        self.assertEqual(set(state["delivered_ids"]), {"@one:1", "@two:2"})
 
     def test_watermark_moves_only_for_a_successful_channel(self):
         now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
