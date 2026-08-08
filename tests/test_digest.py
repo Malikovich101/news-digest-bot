@@ -136,7 +136,7 @@ class DigestUtilityTests(unittest.TestCase):
 
         def fail_on_second(url, data, timeout):
             calls.append(data["text"])
-            if len(calls) == 2:
+            if len(calls) in (2, 3):
                 raise requests.ConnectionError("network unavailable")
             return Response()
 
@@ -151,7 +151,7 @@ class DigestUtilityTests(unittest.TestCase):
         with patch("digest.requests.post", return_value=Response()) as send_mock:
             send_telegram_message("token", "chat", text, state=state, posts=posts)
 
-        self.assertEqual(send_mock.call_count, 1)
+        self.assertEqual(send_mock.call_count, 2)
         self.assertEqual(set(state["delivered_ids"]), {"@one:1", "@two:2"})
 
     def test_watermark_moves_only_for_a_successful_channel(self):
