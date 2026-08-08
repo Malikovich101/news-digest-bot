@@ -25,11 +25,11 @@ jobs:
   run-digest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -49,6 +49,23 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
         run: python digest.py
+
+      - name: Clear completed delivery checkpoints
+        if: success()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("state.json")
+          if path.exists():
+              state = json.loads(path.read_text(encoding="utf-8"))
+              state["delivered_chunks"] = []
+              path.write_text(
+                  json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+          PY
 
       - name: Save state back to repo
         if: always()
