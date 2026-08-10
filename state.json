@@ -1,164 +1,111 @@
 {
   "channels": {
     "@TrendWatching24": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 27408
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 27413
     },
     "@aiaiai": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 21803
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 0
     },
     "@anton_hardin_official": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 36519
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 0
     },
     "@banki_oil": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 51721
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 51728
     },
     "@bazabazon": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 48137
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 0
     },
     "@biggeekru": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
       "last_message_id": 0
     },
     "@bugfeature": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 8682
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 8685
     },
     "@bugnotfeature": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 26939
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 26943
     },
     "@doktorgpt": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 2496
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 2498
     },
     "@economica": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 26925
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 26934
     },
     "@exploitex": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 35766
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 35769
     },
     "@intrendo": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 26817
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 26821
     },
     "@killerfeat": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 18638
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 0
     },
     "@media1337": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 27732
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 27735
     },
     "@neyroseti_dr": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 0
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 3904
     },
     "@rozetked": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 27101
-    },
-    "@rozetkedplus": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 32538
-    },
-    "@technoinsider": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
       "last_message_id": 0
     },
+    "@rozetkedplus": {
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 0
+    },
+    "@technoinsider": {
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 3240
+    },
     "@technomotel": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 21877
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 21880
     },
     "@trends": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 26817
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 26821
     },
     "@vcnews": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 62835
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 0
     },
     "@whackdoor": {
-      "last_checked_at": "2026-08-09T15:41:53.239255+00:00",
-      "last_message_id": 30424
+      "last_checked_at": "2026-08-10T04:48:37.409848+00:00",
+      "last_message_id": 30427
     }
   },
   "delivered_chunks": [],
   "delivered_ids": [
     "@one:1",
     "@two:2",
-    "@rozetkedplus:32538",
-    "@anton_hardin_official:36519",
-    "@banki_oil:51721",
-    "@economica:26925",
-    "@vcnews:62835",
-    "@TrendWatching24:27408",
-    "@bazabazon:48137",
-    "@killerfeat:18638",
-    "@economica:26924",
-    "@aiaiai:21803",
-    "@banki_oil:51719",
-    "@rozetkedplus:32537",
-    "@banki_oil:51717",
-    "@technomotel:21877",
-    "@economica:26923",
-    "@vcnews:62834",
-    "@exploitex:35766",
-    "@bazabazon:48136",
-    "@bugnotfeature:26939",
-    "@banki_oil:51716",
-    "@economica:26922",
-    "@TrendWatching24:27404",
-    "@bugfeature:8682",
-    "@rozetkedplus:32536",
-    "@bugnotfeature:26934",
-    "@banki_oil:51712",
-    "@bazabazon:48133",
-    "@trends:26817",
-    "@economica:26920",
-    "@banki_oil:51711",
-    "@doktorgpt:2496",
-    "@bugnotfeature:26933",
-    "@exploitex:35765",
-    "@vcnews:62833",
-    "@economica:26919",
-    "@banki_oil:51710",
-    "@bugnotfeature:26930",
-    "@media1337:27725",
-    "@bugfeature:8678",
-    "@exploitex:35762",
-    "@bazabazon:48132",
-    "@aiaiai:21799",
-    "@whackdoor:30417",
-    "@TrendWatching24:27403",
-    "@banki_oil:51709",
-    "@exploitex:35761",
-    "@economica:26918",
-    "@rozetkedplus:32535",
-    "@rozetked:27101",
-    "@bazabazon:48131",
-    "@anton_hardin_official:36516",
-    "@economica:26917",
-    "@vcnews:62832",
-    "@bazabazon:48130",
-    "@banki_oil:51707",
-    "@technomotel:21875",
-    "@exploitex:35758",
-    "@aiaiai:21798",
-    "@economica:26916",
-    "@exploitex:35753",
-    "@media1337:27724",
-    "@killerfeat:18635",
-    "@TrendWatching24:27401",
-    "@whackdoor:30415",
-    "@bazabazon:48129",
-    "@banki_oil:51706"
+    "@trends:26821",
+    "@whackdoor:30427",
+    "@economica:26934",
+    "@exploitex:35769",
+    "@economica:26933",
+    "@bugnotfeature:26943",
+    "@bugfeature:8685",
+    "@doktorgpt:2498",
+    "@economica:26932",
+    "@banki_oil:51727",
+    "@TrendWatching24:27410",
+    "@neyroseti_dr:3904",
+    "@economica:26931"
   ],
   "version": 4
 }
