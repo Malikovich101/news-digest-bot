@@ -501,6 +501,7 @@ def format_post_time(value):
 
 def format_digest(posts, stats, semantic_duplicates, confirmed_ads=0, ai_unavailable=False, cross_run_duplicates=0):
     lines = [
+        "❗❗❗❗❗❗",
         "🗞 Оригинальные новости",
         (
             f"📊 Постов с текстом: {stats['source_posts']}; явной рекламы: {stats['ads']}; "
@@ -616,7 +617,7 @@ def main():
         )
     if failed_channels and len(failed_channels) == len(channels):
         raise RuntimeError("All configured channels failed to load")
-    collected.sort(key=lambda post: post["date"], reverse=True)
+    collected.sort(key=lambda post: post["date"])
     posts, stats = filter_and_deduplicate(collected)
     ai_unavailable = False
     confirmed_ads = 0
@@ -643,7 +644,7 @@ def main():
         cross_run_duplicates,
     )
     if not posts and not ai_unavailable:
-        digest = "🗞 За этот период новых подходящих новостей не было."
+        digest = "❗❗❗❗❗❗\n🗞 За этот период новых подходящих новостей не было."
     if failed_channels:
         digest += "\n\n⚠️ Не удалось проверить: " + ", ".join(failed_channels)
     send_telegram_message(
