@@ -23,6 +23,10 @@ RETRY_ATTEMPTS = 2
 PERM_TIMEZONE = timezone(timedelta(hours=5))
 MAX_DELIVERED_IDS = 2_000
 MAX_DELIVERED_CHUNKS = 2_000
+RECENT_NEWS_HOURS = 36
+MAX_RECENT_NEWS = 200
+MAX_RECENT_NEWS_CHARS = 500
+RECENT_NEWS_HISTORY_BATCH = 40
 
 AD_MARKERS = (
     "#реклама", "erid", "промокод", "рекламная интеграция",
@@ -52,25 +56,43 @@ def load_channels():
         return [line.strip() for line in file if line.strip() and not line.strip().startswith("#")]
 
 
+def parse_datetime(value, fallback):
+    if not value:
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return {"version": 4, "channels": {}, "delivered_ids": [], "delivered_chunks": []}
+        return {
+            "version": 5,
+            "channels": {},
+            "delivered_ids": [],
+            "delivered_chunks": [],
+            "recent_news": [],
+        }
     with open(STATE_FILE, "r", encoding="utf-8") as file:
         state = json.load(file)
     return {
-        "version": 4,
+        "version": 5,
         "channels": state.get("channels", {}),
         "delivered_ids": list(state.get("delivered_ids", []))[-MAX_DELIVERED_IDS:],
         "delivered_chunks": list(state.get("delivered_chunks", []))[-MAX_DELIVERED_CHUNKS:],
+        "recent_news": list(state.get("recent_news", []))[-MAX_RECENT_NEWS:],
         "legacy_last_run": state.get("last_run"),
     }
 
 
 def save_state(state):
     state.pop("legacy_last_run", None)
-    state["version"] = 4
+    state["version"] = 5
     state["delivered_ids"] = list(dict.fromkeys(state.get("delivered_ids", [])))[-MAX_DELIVERED_IDS:]
     state["delivered_chunks"] = list(dict.fromkeys(state.get("delivered_chunks", [])))[-MAX_DELIVERED_CHUNKS:]
+    state["recent_news"] = list(state.get("recent_news", []))[-MAX_RECENT_NEWS:]
     temp_file = STATE_FILE + ".tmp"
     with open(temp_file, "w", encoding="utf-8") as output:
         json.dump(state, output, ensure_ascii=False, indent=2, sort_keys=True)
@@ -79,14 +101,40 @@ def save_state(state):
     os.replace(temp_file, STATE_FILE)
 
 
-def parse_datetime(value, fallback):
-    if not value:
-        return fallback
-    try:
-        parsed = datetime.fromisoformat(value)
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return fallback
+def prune_recent_news(recent_news, now):
+    cutoff = now - timedelta(hours=RECENT_NEWS_HOURS)
+    valid = []
+    for item in recent_news or []:
+        if not isinstance(item, dict):
+            continue
+        delivered_at = parse_datetime(item.get("delivered_at"), None)
+        if delivered_at is None or delivered_at < cutoff:
+            continue
+        item_id = item.get("id")
+        text = item.get("text")
+        date = item.get("date")
+        if not item_id or not text or not date:
+            continue
+        valid.append({
+            "id": item_id,
+            "date": date,
+            "delivered_at": delivered_at.isoformat(),
+            "text": analysis_text(text)[:MAX_RECENT_NEWS_CHARS],
+        })
+    valid.sort(key=lambda item: item["delivered_at"], reverse=True)
+    return valid[:MAX_RECENT_NEWS]
+
+
+def remember_delivered_news(state, posts, delivered_at):
+    existing = {item.get("id"): item for item in state.get("recent_news", []) if isinstance(item, dict)}
+    for post in posts:
+        existing[post["id"]] = {
+            "id": post["id"],
+            "date": post["date"],
+            "delivered_at": delivered_at.isoformat(),
+            "text": analysis_text(post["text"])[:MAX_RECENT_NEWS_CHARS],
+        }
+    state["recent_news"] = prune_recent_news(list(existing.values()), delivered_at)
 
 
 def analysis_text(text):
@@ -166,10 +214,11 @@ def collect_posts(client, channels, state, now, replay_hours=0):
     posts = []
     failed_channels = []
     next_state = {
-        "version": 4,
+        "version": 5,
         "channels": dict(state.get("channels", {})),
         "delivered_ids": list(state.get("delivered_ids", [])),
         "delivered_chunks": list(state.get("delivered_chunks", [])),
+        "recent_news": list(state.get("recent_news", [])),
     }
     delivered_ids = set(state.get("delivered_ids", []))
     legacy_cutoff = parse_datetime(state.get("legacy_last_run"), now - timedelta(hours=FIRST_RUN_LOOKBACK_HOURS))
@@ -323,6 +372,62 @@ def duplicate_ids_from_response(response, allowed_ids):
     return dropped
 
 
+def recent_news_prompt(current_posts, history):
+    current_payload = [model_item(post, MAX_PREVIEW_CHARS) for post in current_posts]
+    history_payload = [
+        {
+            "id": item["id"],
+            "date": item["date"],
+            "text": analysis_text(item["text"])[:MAX_RECENT_NEWS_CHARS],
+        }
+        for item in history
+    ]
+    return f"""Ты находишь только повторяющиеся новости между ДВУМЯ наборами сообщений Telegram.
+
+Набор HISTORY содержит новости, которые пользователь УЖЕ получил в предыдущих дайджестах.
+Набор CURRENT содержит новые кандидаты для текущего дайджеста.
+
+Отметь только те CURRENT-публикации, которые сообщают ОБ ОДНОМ И ТОМ ЖЕ КОНКРЕТНОМ СОБЫТИИ,
+что и публикация из HISTORY. Не считай дублем просто похожую тему, тот же бренд, ту же
+персону или продолжение истории. Новое развитие события, новый факт, новый результат или
+новый этап истории оставляй в CURRENT.
+
+Если есть сомнение — НЕ считай CURRENT публикацию повтором. Нужна высокая точность: лучше
+пропустить один повтор, чем удалить свежую новость.
+
+Верни только JSON строго такого вида:
+{{"repeats":["id CURRENT-публикации 1","id CURRENT-публикации 2"]}}
+В массиве должны быть только id из CURRENT. Никогда не возвращай id из HISTORY.
+
+HISTORY:
+{json.dumps(history_payload, ensure_ascii=False)}
+
+CURRENT:
+{json.dumps(current_payload, ensure_ascii=False)}"""
+
+
+def recent_news_repeat_ids(response, allowed_current_ids):
+    repeats = response.get("repeats", [])
+    if not isinstance(repeats, list):
+        return set()
+    return {item for item in repeats if item in allowed_current_ids}
+
+
+def cross_run_semantic_deduplicate(client, posts, recent_news):
+    if not posts or not recent_news:
+        return posts, 0
+    history = sorted(recent_news, key=lambda item: item.get("delivered_at", ""), reverse=True)
+    dropped = set()
+    for current_batch in make_ai_batches(posts, MAX_PREVIEW_CHARS):
+        for start in range(0, len(history), RECENT_NEWS_HISTORY_BATCH):
+            history_batch = history[start:start + RECENT_NEWS_HISTORY_BATCH]
+            response = generate_json(client, recent_news_prompt(current_batch, history_batch))
+            dropped.update(
+                recent_news_repeat_ids(response, {post["id"] for post in current_batch})
+            )
+    return [post for post in posts if post["id"] not in dropped], len(dropped)
+
+
 def ad_review_prompt(posts):
     payload = [model_item(post, MAX_MODEL_POST_CHARS) for post in posts]
     return f"""Ты классифицируешь Telegram-публикации только на предмет рекламы или промо.
@@ -394,19 +499,20 @@ def format_post_time(value):
     return parsed.astimezone(PERM_TIMEZONE).strftime("%d.%m %H:%M")
 
 
-def format_digest(posts, stats, semantic_duplicates, confirmed_ads=0, ai_unavailable=False):
+def format_digest(posts, stats, semantic_duplicates, confirmed_ads=0, ai_unavailable=False, cross_run_duplicates=0):
     lines = [
         "🗞 Оригинальные новости",
         (
             f"📊 Постов с текстом: {stats['source_posts']}; явной рекламы: {stats['ads']}; "
             f"проверено Gemini: {stats.get('ad_review', 0)}; рекламы подтверждено Gemini: {confirmed_ads}; "
             f"отсеяно коротких: {stats['short']}; точных повторов: {stats['python_duplicates']}; "
-            f"смысловых повторов: {semantic_duplicates}; оригинальных публикаций: {len(posts)}"
+            f"смысловых повторов: {semantic_duplicates}; повторов из прошлых дайджестов: {cross_run_duplicates}; "
+            f"оригинальных публикаций: {len(posts)}"
         ),
         "Каждый текст ниже — оригинальный пост канала, без пересказа и сокращения.",
     ]
     if ai_unavailable:
-        lines.append("⚠️ Gemini был недоступен: сомнительные рекламные посты оставлены, чтобы не потерять новости.")
+        lines.append("⚠️ Gemini был недоступен: сомнительные рекламные посты и междайджестная дедупликация оставлены, чтобы не потерять новости.")
     for post in posts:
         lines.extend([
             "",
@@ -495,6 +601,7 @@ def main():
     require_environment()
     now = utc_now()
     state = load_state()
+    state["recent_news"] = prune_recent_news(state.get("recent_news", []), now)
     channels = load_channels()
     replay_hours = replay_hours_from_environment()
     if not channels:
@@ -514,15 +621,27 @@ def main():
     ai_unavailable = False
     confirmed_ads = 0
     semantic_duplicates = 0
+    cross_run_duplicates = 0
     if posts:
         try:
             gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
             posts, confirmed_ads = review_suspicious_ads(gemini_client, posts)
+            if replay_hours == 0:
+                posts, cross_run_duplicates = cross_run_semantic_deduplicate(
+                    gemini_client, posts, state.get("recent_news", [])
+                )
             posts, semantic_duplicates = semantic_deduplicate(gemini_client, posts)
         except RuntimeError as error:
             ai_unavailable = True
             print(f"Gemini unavailable, sending without AI filtering: {error}")
-    digest = format_digest(posts, stats, semantic_duplicates, confirmed_ads, ai_unavailable)
+    digest = format_digest(
+        posts,
+        stats,
+        semantic_duplicates,
+        confirmed_ads,
+        ai_unavailable,
+        cross_run_duplicates,
+    )
     if not posts and not ai_unavailable:
         digest = "🗞 За этот период новых подходящих новостей не было."
     if failed_channels:
@@ -535,15 +654,20 @@ def main():
         posts=posts,
     )
     if replay_hours == 0:
+        delivered_at = utc_now()
+        remember_delivered_news(state, posts, delivered_at)
         next_state["delivered_ids"] = state.get("delivered_ids", [])
         next_state["delivered_chunks"] = state.get("delivered_chunks", [])
+        next_state["recent_news"] = state.get("recent_news", [])
         save_state(next_state)
     else:
         state["delivered_ids"] = []
+        state["recent_news"] = prune_recent_news(state.get("recent_news", []), utc_now())
         save_state(state)
     print(
         f"Delivered {len(posts)} original posts from {len(collected)} collected "
-        f"(semantic_duplicates={semantic_duplicates}, confirmed_ads={confirmed_ads}, replay_hours={replay_hours})"
+        f"(semantic_duplicates={semantic_duplicates}, cross_run_duplicates={cross_run_duplicates}, "
+        f"confirmed_ads={confirmed_ads}, replay_hours={replay_hours})"
     )
 
 

@@ -10,6 +10,7 @@ from digest import (
     ad_ids_from_response,
     candidate_clusters,
     collect_posts,
+    cross_run_semantic_deduplicate,
     duplicate_ids_from_response,
     filter_and_deduplicate,
     format_digest,
@@ -104,6 +105,7 @@ class DigestUtilityTests(unittest.TestCase):
             {"source_posts": 3, "short": 0, "ads": 1, "ad_review": 2, "python_duplicates": 1},
             semantic_duplicates=0,
             confirmed_ads=1,
+            cross_run_duplicates=2,
         )
         self.assertIn(original, text)
         self.assertIn("явной рекламы: 1", text)
@@ -111,6 +113,7 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertIn("рекламы подтверждено Gemini: 1", text)
         self.assertIn("точных повторов: 1", text)
         self.assertIn("смысловых повторов: 0", text)
+        self.assertIn("повторов из прошлых дайджестов: 2", text)
         self.assertIn("оригинальных публикаций: 1", text)
 
     def test_telegram_messages_never_exceed_limit(self):
@@ -153,6 +156,29 @@ class DigestUtilityTests(unittest.TestCase):
 
         self.assertEqual(send_mock.call_count, 2)
         self.assertEqual(set(state["delivered_ids"]), {"@one:1", "@two:2"})
+
+    def test_cross_run_semantic_memory_filters_already_delivered_event(self):
+        current_posts = [
+            post("Apple представила новый iPhone X на большой презентации.", "@current:10"),
+            post("Компания анонсировала новый тариф для мобильной связи.", "@current:11"),
+        ]
+        history = [
+            {
+                "id": "@old:1",
+                "date": "2026-07-30T09:00:00+00:00",
+                "delivered_at": "2026-07-30T09:10:00+00:00",
+                "text": "Apple представила новый iPhone X на презентации.",
+            }
+        ]
+
+        class Models:
+            def generate_content(self, model, contents, config):
+                return SimpleNamespace(text='{"repeats":["@current:10"]}')
+
+        client = SimpleNamespace(models=Models())
+        kept, dropped = cross_run_semantic_deduplicate(client, current_posts, history)
+        self.assertEqual([item["id"] for item in kept], ["@current:11"])
+        self.assertEqual(dropped, 1)
 
     def test_watermark_moves_only_for_a_successful_channel(self):
         now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
