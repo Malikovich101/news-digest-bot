@@ -45,11 +45,13 @@ class RecentMemoryTests(unittest.TestCase):
         history = [
             {
                 "id": "@history:1",
+                "date": "2026-08-11T10:00:00+00:00",
                 "delivered_at": "2026-08-11T10:00:00+00:00",
                 "text": "Apple представила новый iPhone X на презентации",
             },
             {
                 "id": "@history:2",
+                "date": "2026-08-11T09:00:00+00:00",
                 "delivered_at": "2026-08-11T09:00:00+00:00",
                 "text": "Компания открыла новый логистический центр",
             },
@@ -65,11 +67,13 @@ class RecentMemoryTests(unittest.TestCase):
         history = [
             {
                 "id": "@history:1",
+                "date": "2026-08-11T10:00:00+00:00",
                 "delivered_at": "2026-08-11T10:00:00+00:00",
                 "text": "Apple представила новый iPhone X на презентации",
             },
             {
                 "id": "@history:2",
+                "date": "2026-08-11T09:00:00+00:00",
                 "delivered_at": "2026-08-11T09:00:00+00:00",
                 "text": "Компания открыла новый логистический центр",
             },
