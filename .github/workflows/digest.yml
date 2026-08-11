@@ -27,7 +27,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: main
+          fetch-depth: 1
           persist-credentials: true
+
+      - name: Verify repository state
+        run: |
+          echo "Checked out commit: $(git rev-parse HEAD)"
+          echo "Origin main: $(git rev-parse origin/main)"
 
       - uses: actions/setup-python@v6
         with:

@@ -1,4 +1,4 @@
-import digest
+import digest as digest
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -6,10 +6,13 @@ import re
 
 
 def install(digest_module):
-    digest_module.load_state = load_state
-    digest_module.save_state = save_state
-    digest_module.prune_recent_news = prune_recent_news
-    digest_module.cross_run_semantic_deduplicate = cross_run_semantic_deduplicate
+    global digest
+    digest = digest_module
+    digest.load_state = load_state
+    digest.save_state = save_state
+    digest.prune_recent_news = prune_recent_news
+    digest.cross_run_semantic_deduplicate = cross_run_semantic_deduplicate
+    digest.collect_posts = collect_posts
 
 
 def parse_datetime(value, fallback):
@@ -131,6 +134,44 @@ def recent_history_candidates(current_posts, history, candidates_per_post=8):
             if common >= 1:
                 selected[item["id"]] = item
     return sorted(selected.values(), key=lambda item: item.get("delivered_at", ""), reverse=True)
+
+
+def filter_posts_after_last_check(posts, state, replay_hours=0):
+    if replay_hours:
+        return posts, 0
+    previous_channels = state.get("channels", {})
+    filtered = []
+    suppressed = 0
+    for post in posts:
+        channel_state = previous_channels.get(post.get("channel"), {})
+        checked_at = parse_datetime(channel_state.get("last_checked_at"), None)
+        post_date = parse_datetime(post.get("date"), None)
+        if checked_at is not None and post_date is not None and post_date <= checked_at:
+            suppressed += 1
+            continue
+        filtered.append(post)
+    return filtered, suppressed
+
+
+def collect_posts(client, channels, state, now, replay_hours=0):
+    original_collect = getattr(collect_posts, "_original", None)
+    if original_collect is None:
+        original_collect = digest._base_collect_posts if hasattr(digest, "_base_collect_posts") else digest.collect_posts
+    posts, next_state, failed_channels = original_collect(
+        client, channels, state, now, replay_hours=replay_hours
+    )
+    filtered, suppressed = filter_posts_after_last_check(posts, state, replay_hours=replay_hours)
+    if suppressed:
+        print(
+            f"Digest time window: suppressed {suppressed} messages at or before "
+            "the previous successful channel check."
+        )
+    return filtered, next_state, failed_channels
+
+
+# Capture the original collector before install() replaces it.
+digest._base_collect_posts = digest.collect_posts
+collect_posts._original = digest._base_collect_posts
 
 
 def cross_run_semantic_deduplicate(client, posts, recent_news):
