@@ -76,7 +76,6 @@ class RecentMemoryTests(unittest.TestCase):
         ]
 
         prompts = []
-
         original_batch = memory.digest.make_ai_batches
         original_generate = memory.digest.generate_json
         try:
@@ -99,6 +98,54 @@ class RecentMemoryTests(unittest.TestCase):
         self.assertTrue(prompts)
         self.assertIn("@history:1", prompts[0])
         self.assertNotIn("@history:2", prompts[0])
+
+    def test_digest_window_suppresses_messages_before_previous_check(self):
+        state = {
+            "channels": {
+                "@media1337": {
+                    "last_checked_at": "2026-08-11T10:00:00+00:00",
+                    "last_message_id": 27754,
+                }
+            }
+        }
+        posts = [
+            {
+                "id": "@media1337:27752",
+                "channel": "@media1337",
+                "date": "2026-08-11T07:09:46+00:00",
+                "text": "Старая публикация, которая уже попала в предыдущий период.",
+            },
+            {
+                "id": "@media1337:27755",
+                "channel": "@media1337",
+                "date": "2026-08-11T10:01:00+00:00",
+                "text": "Новая публикация после предыдущей проверки.",
+            },
+        ]
+        kept, suppressed = memory.filter_posts_after_last_check(posts, state)
+        self.assertEqual([item["id"] for item in kept], ["@media1337:27755"])
+        self.assertEqual(suppressed, 1)
+
+    def test_digest_window_does_not_apply_to_replay(self):
+        state = {
+            "channels": {
+                "@media1337": {
+                    "last_checked_at": "2026-08-11T10:00:00+00:00",
+                    "last_message_id": 27754,
+                }
+            }
+        }
+        posts = [
+            {
+                "id": "@media1337:27752",
+                "channel": "@media1337",
+                "date": "2026-08-11T07:09:46+00:00",
+                "text": "Старая публикация для ручного replay.",
+            }
+        ]
+        kept, suppressed = memory.filter_posts_after_last_check(posts, state, replay_hours=1)
+        self.assertEqual(kept, posts)
+        self.assertEqual(suppressed, 0)
 
 
 if __name__ == "__main__":
