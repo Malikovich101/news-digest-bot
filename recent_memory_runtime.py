@@ -1,14 +1,15 @@
+import digest
 from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
 
 
-def install(digest):
-    digest.load_state = load_state
-    digest.save_state = save_state
-    digest.prune_recent_news = prune_recent_news
-    digest.cross_run_semantic_deduplicate = cross_run_semantic_deduplicate
+def install(digest_module):
+    digest_module.load_state = load_state
+    digest_module.save_state = save_state
+    digest_module.prune_recent_news = prune_recent_news
+    digest_module.cross_run_semantic_deduplicate = cross_run_semantic_deduplicate
 
 
 def parse_datetime(value, fallback):
