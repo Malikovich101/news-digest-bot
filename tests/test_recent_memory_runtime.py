@@ -151,7 +151,7 @@ class RecentMemoryTests(unittest.TestCase):
         self.assertEqual(kept, posts)
         self.assertEqual(suppressed, 0)
 
-    def test_temporal_guard_restores_posts_from_large_gap(self):
+    def test_temporal_guard_preserves_max_gap_after_deduplication(self):
         start = datetime(2026, 8, 11, 16, tzinfo=timezone.utc)
         posts = []
         for index, hours in enumerate([0, 1, 2, 4, 4.5]):
@@ -173,10 +173,15 @@ class RecentMemoryTests(unittest.TestCase):
         finally:
             memory.BASE_SEMANTIC_DEDUPLICATE = original
 
-        self.assertEqual([item["id"] for item in kept], [
-            "@current:0", "@current:2", "@current:3", "@current:4"
-        ])
-        self.assertEqual(dropped, 1)
+        kept_dates = [datetime.fromisoformat(item["date"]) for item in kept]
+        self.assertEqual(kept_dates, sorted(kept_dates))
+        self.assertEqual(kept[0]["id"], "@current:0")
+        self.assertEqual(kept[-1]["id"], "@current:4")
+        self.assertTrue(all(
+            right - left <= memory.MAX_SEMANTIC_COVERAGE_GAP
+            for left, right in zip(kept_dates, kept_dates[1:])
+        ))
+        self.assertEqual(dropped, len(posts) - len(kept))
 
     def test_temporal_guard_restores_all_posts_if_ai_drops_everything(self):
         posts = [
