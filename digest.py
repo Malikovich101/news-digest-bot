@@ -573,10 +573,22 @@ def send_telegram_message(token, chat_id, text, state=None, posts=None):
         if state is not None:
             delivered_chunks.add(checkpoint)
             state["delivered_chunks"] = list(delivered_chunks)[-MAX_DELIVERED_CHUNKS:]
+            if posts:
+                delivered_post_ids = [
+                    post["id"]
+                    for post in posts
+                    if post.get("url") and post["url"] in chunk
+                ]
+                if delivered_post_ids:
+                    state["delivered_ids"] = list(
+                        dict.fromkeys(list(state.get("delivered_ids", [])) + delivered_post_ids)
+                    )[-MAX_DELIVERED_IDS:]
             save_state(state)
 
-    if state is not None and posts is not None:
-        state["delivered_ids"] = list(dict.fromkeys(list(state.get("delivered_ids", [])) + [post["id"] for post in posts]))[-MAX_DELIVERED_IDS:]
+    if state is not None and posts:
+        state["delivered_ids"] = list(
+            dict.fromkeys(list(state.get("delivered_ids", [])) + [post["id"] for post in posts])
+        )[-MAX_DELIVERED_IDS:]
         save_state(state)
 
 
