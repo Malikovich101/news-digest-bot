@@ -220,6 +220,9 @@ def _restore_temporal_coverage(posts, kept_posts):
         return parse_datetime(post.get("date"), None)
 
     restored = set(kept_ids)
+    earliest_dt = dt(ordered[0])
+    latest_dt = dt(ordered[-1])
+
     while True:
         current = [post for post in ordered if post["id"] in restored]
         dropped = [post for post in ordered if post["id"] not in restored and dt(post) is not None]
@@ -227,24 +230,22 @@ def _restore_temporal_coverage(posts, kept_posts):
         best_candidate = None
 
         first_kept = dt(current[0])
-        if first_kept is not None:
-            earlier = [post for post in dropped if dt(post) < first_kept]
-            if earlier:
-                nearest = max(earlier, key=lambda post: dt(post))
-                gap = first_kept - dt(nearest)
-                if gap > MAX_SEMANTIC_COVERAGE_GAP:
-                    best_gap = gap
-                    best_candidate = nearest
+        if first_kept is not None and earliest_dt is not None:
+            boundary_gap = first_kept - earliest_dt
+            if boundary_gap > MAX_SEMANTIC_COVERAGE_GAP:
+                earlier = [post for post in dropped if dt(post) < first_kept]
+                if earlier:
+                    best_gap = boundary_gap
+                    best_candidate = max(earlier, key=lambda post: dt(post))
 
         last_kept = dt(current[-1])
-        if last_kept is not None:
-            later = [post for post in dropped if dt(post) > last_kept]
-            if later:
-                nearest = min(later, key=lambda post: dt(post))
-                gap = dt(nearest) - last_kept
-                if gap > (best_gap or MAX_SEMANTIC_COVERAGE_GAP):
-                    best_gap = gap
-                    best_candidate = nearest
+        if last_kept is not None and latest_dt is not None:
+            boundary_gap = latest_dt - last_kept
+            if boundary_gap > MAX_SEMANTIC_COVERAGE_GAP:
+                later = [post for post in dropped if dt(post) > last_kept]
+                if later and (best_gap is None or boundary_gap > best_gap):
+                    best_gap = boundary_gap
+                    best_candidate = min(later, key=lambda post: dt(post))
 
         for left, right in zip(current, current[1:]):
             left_dt = dt(left)
@@ -257,7 +258,7 @@ def _restore_temporal_coverage(posts, kept_posts):
             between = [post for post in dropped if left_dt < dt(post) < right_dt]
             if between and (best_gap is None or gap > best_gap):
                 best_gap = gap
-                best_candidate = min(between, key=lambda post: dt(post))
+                best_candidate = max(between, key=lambda post: dt(post))
 
         if best_candidate is None:
             break
