@@ -43,8 +43,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+      - name: Run unit tests in isolated workspace
+        run: |
+          TEST_DIR="$(mktemp -d)"
+          tar --exclude=.git --exclude=state.json --exclude='state.json.tmp' -cf - . | tar -xf - -C "$TEST_DIR"
+          cd "$TEST_DIR"
+          python -m unittest discover -s tests -v
 
       - name: Run digest script
         env:
