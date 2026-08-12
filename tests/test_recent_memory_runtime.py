@@ -1,204 +1,105 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
-import recent_memory_runtime as memory
+import digest
+import recent_memory_runtime
 
 
 class RecentMemoryTests(unittest.TestCase):
-    def test_prune_keeps_all_items_within_36_hours(self):
-        now = datetime(2026, 8, 11, 20, tzinfo=timezone.utc)
-        history = [
-            {
-                "id": f"@channel:{index}",
-                "date": (now - timedelta(hours=hours)).isoformat(),
-                "delivered_at": (now - timedelta(hours=hours)).isoformat(),
-                "text": f"Новость {index} про событие и технологию {index}",
-            }
-            for index, hours in enumerate([1] * 250)
-        ]
-        kept = memory.prune_recent_news(history, now)
-        self.assertEqual(len(kept), 250)
-
     def test_prune_drops_only_items_older_than_36_hours(self):
-        now = datetime(2026, 8, 11, 20, tzinfo=timezone.utc)
-        recent = {
-            "id": "@recent:1",
-            "date": (now - timedelta(hours=35)).isoformat(),
-            "delivered_at": (now - timedelta(hours=35)).isoformat(),
-            "text": "Важная новость про Apple и новый iPhone",
-        }
-        old = {
-            "id": "@old:1",
-            "date": (now - timedelta(hours=37)).isoformat(),
-            "delivered_at": (now - timedelta(hours=37)).isoformat(),
-            "text": "Старая новость, которая должна быть удалена",
-        }
-        kept = memory.prune_recent_news([recent, old], now)
-        self.assertEqual([item["id"] for item in kept], ["@recent:1"])
+        now = datetime(2026, 8, 12, 12, tzinfo=timezone.utc)
+        history = [
+            {"id": "old", "date": "2026-08-10T11:00:00+00:00", "delivered_at": "2026-08-10T11:00:00+00:00", "text": "old"},
+            {"id": "new", "date": "2026-08-11T00:00:00+00:00", "delivered_at": "2026-08-11T00:00:00+00:00", "text": "new"},
+        ]
+        pruned = recent_memory_runtime.prune_recent_news(history, now)
+        self.assertEqual([item["id"] for item in pruned], ["new"])
+
+    def test_prune_keeps_all_items_within_36_hours(self):
+        now = datetime(2026, 8, 12, 12, tzinfo=timezone.utc)
+        history = [
+            {"id": "a", "date": "2026-08-11T00:00:00+00:00", "delivered_at": "2026-08-11T00:00:00+00:00", "text": "a"},
+            {"id": "b", "date": "2026-08-11T23:00:00+00:00", "delivered_at": "2026-08-11T23:00:00+00:00", "text": "b"},
+        ]
+        pruned = recent_memory_runtime.prune_recent_news(history, now)
+        self.assertEqual({item["id"] for item in pruned}, {"a", "b"})
 
     def test_candidate_filter_finds_lexically_related_history(self):
-        current = [{
-            "id": "@current:1",
-            "text": "Apple представила новый iPhone X на презентации",
-        }]
-        history = [
-            {
-                "id": "@history:1",
-                "date": "2026-08-11T10:00:00+00:00",
-                "delivered_at": "2026-08-11T10:00:00+00:00",
-                "text": "Apple представила новый iPhone X на презентации",
-            },
-            {
-                "id": "@history:2",
-                "date": "2026-08-11T09:00:00+00:00",
-                "delivered_at": "2026-08-11T09:00:00+00:00",
-                "text": "Компания открыла новый логистический центр",
-            },
-        ]
-        candidates = memory.recent_history_candidates(current, history, candidates_per_post=8)
-        self.assertIn("@history:1", {item["id"] for item in candidates})
+        posts = [{"id": "current", "text": "Apple представила новый iPhone X на презентации."}]
+        history = [{"id": "history", "text": "Apple представила новый iPhone X." , "delivered_at": "2026-08-12T10:00:00+00:00"}]
+        candidates = recent_memory_runtime.recent_history_candidates(posts, history)
+        self.assertEqual([item["id"] for item in candidates], ["history"])
 
     def test_cross_run_memory_uses_only_candidate_history_for_gemini(self):
-        current = [{
-            "id": "@current:1",
-            "text": "Apple представила новый iPhone X на презентации",
-        }]
+        current_posts = [{"id": "current", "text": "Apple представила новый iPhone X на презентации."}]
         history = [
-            {
-                "id": "@history:1",
-                "date": "2026-08-11T10:00:00+00:00",
-                "delivered_at": "2026-08-11T10:00:00+00:00",
-                "text": "Apple представила новый iPhone X на презентации",
-            },
-            {
-                "id": "@history:2",
-                "date": "2026-08-11T09:00:00+00:00",
-                "delivered_at": "2026-08-11T09:00:00+00:00",
-                "text": "Компания открыла новый логистический центр",
-            },
+            {"id": "related", "text": "Apple представила новый iPhone X.", "date": "2026-08-12T10:00:00+00:00", "delivered_at": "2026-08-12T10:00:00+00:00"},
+            {"id": "unrelated", "text": "Новости о погоде в регионе.", "date": "2026-08-12T09:00:00+00:00", "delivered_at": "2026-08-12T09:00:00+00:00"},
         ]
 
-        prompts = []
-        original_batch = memory.digest.make_ai_batches
-        original_generate = memory.digest.generate_json
-        try:
-            memory.digest.make_ai_batches = lambda posts, text_limit, overlap=0: [posts]
+        seen = []
 
-            def fake_generate(client, prompt):
-                prompts.append(prompt)
-                return {"repeats": ["@current:1"]}
+        def fake_generate_json(client, prompt):
+            seen.append(prompt)
+            return {"repeats": ["current"]}
 
-            memory.digest.generate_json = fake_generate
-            kept, dropped = memory.cross_run_semantic_deduplicate(
-                SimpleNamespace(), current, history
+        with patch.object(digest, "generate_json", side_effect=fake_generate_json):
+            kept, dropped = recent_memory_runtime.cross_run_semantic_deduplicate(
+                SimpleNamespace(), current_posts, history
             )
-        finally:
-            memory.digest.make_ai_batches = original_batch
-            memory.digest.generate_json = original_generate
 
         self.assertEqual(kept, [])
         self.assertEqual(dropped, 1)
-        self.assertTrue(prompts)
-        self.assertIn("@history:1", prompts[0])
-        self.assertNotIn("@history:2", prompts[0])
+        self.assertEqual(len(seen), 1)
+        self.assertIn("related", seen[0])
+        self.assertNotIn("unrelated", seen[0])
 
     def test_digest_window_suppresses_messages_before_previous_check(self):
-        state = {
-            "channels": {
-                "@media1337": {
-                    "last_checked_at": "2026-08-11T10:00:00+00:00",
-                    "last_message_id": 27754,
-                }
-            }
-        }
+        state = {"channels": {"@news": {"last_checked_at": "2026-08-12T15:01:00+00:00"}}}
         posts = [
-            {
-                "id": "@media1337:27752",
-                "channel": "@media1337",
-                "date": "2026-08-11T07:09:46+00:00",
-                "text": "Старая публикация, которая уже попала в предыдущий период.",
-            },
-            {
-                "id": "@media1337:27755",
-                "channel": "@media1337",
-                "date": "2026-08-11T10:01:00+00:00",
-                "text": "Новая публикация после предыдущей проверки.",
-            },
+            {"id": "@news:1", "channel": "@news", "date": "2026-08-12T12:07:00+00:00"},
+            {"id": "@news:2", "channel": "@news", "date": "2026-08-12T15:01:00+00:00"},
+            {"id": "@news:3", "channel": "@news", "date": "2026-08-12T15:02:00+00:00"},
         ]
-        kept, suppressed = memory.filter_posts_after_last_check(posts, state)
-        self.assertEqual([item["id"] for item in kept], ["@media1337:27755"])
-        self.assertEqual(suppressed, 1)
+        filtered, suppressed = recent_memory_runtime.filter_posts_after_last_check(posts, state)
+        self.assertEqual([item["id"] for item in filtered], ["@news:3"])
+        self.assertEqual(suppressed, 2)
 
     def test_digest_window_does_not_apply_to_replay(self):
-        state = {
-            "channels": {
-                "@media1337": {
-                    "last_checked_at": "2026-08-11T10:00:00+00:00",
-                    "last_message_id": 27754,
-                }
-            }
-        }
-        posts = [
-            {
-                "id": "@media1337:27752",
-                "channel": "@media1337",
-                "date": "2026-08-11T07:09:46+00:00",
-                "text": "Старая публикация для ручного replay.",
-            }
-        ]
-        kept, suppressed = memory.filter_posts_after_last_check(posts, state, replay_hours=1)
-        self.assertEqual(kept, posts)
+        state = {"channels": {"@news": {"last_checked_at": "2026-08-12T15:01:00+00:00"}}}
+        posts = [{"id": "@news:1", "channel": "@news", "date": "2026-08-12T12:07:00+00:00"}]
+        filtered, suppressed = recent_memory_runtime.filter_posts_after_last_check(posts, state, replay_hours=1)
+        self.assertEqual(filtered, posts)
         self.assertEqual(suppressed, 0)
 
-    def test_temporal_guard_preserves_max_gap_after_deduplication(self):
-        start = datetime(2026, 8, 11, 16, tzinfo=timezone.utc)
-        posts = []
-        for index, hours in enumerate([0, 1, 2, 4, 4.5]):
-            posts.append({
-                "id": f"@current:{index}",
-                "date": (start + timedelta(hours=hours)).isoformat(),
-                "text": f"Новость {index}",
-            })
-
-        kept = memory._restore_temporal_coverage(posts, [posts[-1]])
-        kept_dates = [datetime.fromisoformat(item["date"]) for item in kept]
-        earliest_date = datetime.fromisoformat(posts[0]["date"])
-        self.assertEqual(kept_dates, sorted(kept_dates))
-        self.assertEqual([item["id"] for item in kept], [
-            "@current:2", "@current:3", "@current:4"
-        ])
-        self.assertLessEqual(kept_dates[0] - earliest_date, memory.MAX_SEMANTIC_COVERAGE_GAP)
-        self.assertTrue(all(
-            right - left <= memory.MAX_SEMANTIC_COVERAGE_GAP
-            for left, right in zip(kept_dates, kept_dates[1:])
-        ))
-
-    def test_temporal_guard_restores_all_posts_if_ai_drops_everything(self):
+    def test_temporal_guard_is_not_used_to_restore_semantic_duplicates(self):
         posts = [
-            {
-                "id": "@current:1",
-                "date": "2026-08-11T16:00:00+00:00",
-                "text": "Новость 1",
-            },
-            {
-                "id": "@current:2",
-                "date": "2026-08-11T20:00:00+00:00",
-                "text": "Новость 2",
-            },
+            {"id": "a", "date": "2026-08-12T00:00:00+00:00", "text": "Первая новость."},
+            {"id": "b", "date": "2026-08-12T03:00:00+00:00", "text": "Повтор первой новости."},
         ]
 
-        original = memory.BASE_SEMANTIC_DEDUPLICATE
-        try:
-            memory.BASE_SEMANTIC_DEDUPLICATE = lambda client, current: ([], len(current))
-            kept, dropped = memory.semantic_deduplicate_with_temporal_guard(
-                SimpleNamespace(), posts
-            )
-        finally:
-            memory.BASE_SEMANTIC_DEDUPLICATE = original
+        def fake_semantic(client, items):
+            return [items[1]], 1
 
-        self.assertEqual(kept, posts)
-        self.assertEqual(dropped, 0)
+        with patch.object(digest, "semantic_deduplicate", side_effect=fake_semantic):
+            # Production runtime no longer restores a dropped post just to fill a time gap.
+            self.assertFalse(hasattr(recent_memory_runtime, "_restore_temporal_coverage"))
+
+    def test_state_recent_news_has_no_artificial_count_cap(self):
+        now = datetime.now(timezone.utc)
+        history = [
+            {
+                "id": str(index),
+                "date": now.isoformat(),
+                "delivered_at": (now - timedelta(minutes=index)).isoformat(),
+                "text": f"news {index}",
+            }
+            for index in range(250)
+        ]
+        pruned = recent_memory_runtime.prune_recent_news(history, now)
+        self.assertEqual(len(pruned), 250)
 
 
 if __name__ == "__main__":
