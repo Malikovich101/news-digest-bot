@@ -28,7 +28,7 @@ class RecentMemoryTests(unittest.TestCase):
 
     def test_candidate_filter_finds_lexically_related_history(self):
         posts = [{"id": "current", "text": "Apple представила новый iPhone X на презентации."}]
-        history = [{"id": "history", "text": "Apple представила новый iPhone X." , "delivered_at": "2026-08-12T10:00:00+00:00"}]
+        history = [{"id": "history", "text": "Apple представила новый iPhone X.", "delivered_at": "2026-08-12T10:00:00+00:00"}]
         candidates = recent_memory_runtime.recent_history_candidates(posts, history)
         self.assertEqual([item["id"] for item in candidates], ["history"])
 
@@ -46,9 +46,7 @@ class RecentMemoryTests(unittest.TestCase):
             return {"repeats": ["current"]}
 
         with patch.object(digest, "generate_json", side_effect=fake_generate_json):
-            kept, dropped = recent_memory_runtime.cross_run_semantic_deduplicate(
-                SimpleNamespace(), current_posts, history
-            )
+            kept, dropped = recent_memory_runtime.cross_run_semantic_deduplicate(SimpleNamespace(), current_posts, history)
 
         self.assertEqual(kept, [])
         self.assertEqual(dropped, 1)
@@ -74,18 +72,9 @@ class RecentMemoryTests(unittest.TestCase):
         self.assertEqual(filtered, posts)
         self.assertEqual(suppressed, 0)
 
-    def test_temporal_guard_is_not_used_to_restore_semantic_duplicates(self):
-        posts = [
-            {"id": "a", "date": "2026-08-12T00:00:00+00:00", "text": "Первая новость."},
-            {"id": "b", "date": "2026-08-12T03:00:00+00:00", "text": "Повтор первой новости."},
-        ]
-
-        def fake_semantic(client, items):
-            return [items[1]], 1
-
-        with patch.object(digest, "semantic_deduplicate", side_effect=fake_semantic):
-            # Production runtime no longer restores a dropped post just to fill a time gap.
-            self.assertFalse(hasattr(recent_memory_runtime, "_restore_temporal_coverage"))
+    def test_temporal_guard_was_removed(self):
+        self.assertFalse(hasattr(recent_memory_runtime, "_restore_temporal_coverage"))
+        self.assertFalse(hasattr(recent_memory_runtime, "MAX_SEMANTIC_COVERAGE_GAP"))
 
     def test_state_recent_news_has_no_artificial_count_cap(self):
         now = datetime.now(timezone.utc)
