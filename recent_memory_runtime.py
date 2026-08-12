@@ -6,6 +6,7 @@ import re
 
 
 MAX_SEMANTIC_COVERAGE_GAP = timedelta(hours=2)
+BASE_SEMANTIC_DEDUPLICATE = digest.semantic_deduplicate
 
 
 def install(digest_module):
@@ -16,7 +17,7 @@ def install(digest_module):
     digest.prune_recent_news = prune_recent_news
     digest.cross_run_semantic_deduplicate = cross_run_semantic_deduplicate
     digest.collect_posts = collect_posts
-    digest._base_semantic_deduplicate = digest.semantic_deduplicate
+    digest._base_semantic_deduplicate = BASE_SEMANTIC_DEDUPLICATE
     digest.semantic_deduplicate = semantic_deduplicate_with_temporal_guard
 
 
@@ -221,29 +222,29 @@ def _restore_temporal_coverage(posts, kept_posts):
     restored = set(kept_ids)
     while True:
         current = [post for post in ordered if post["id"] in restored]
+        dropped = [post for post in ordered if post["id"] not in restored and dt(post) is not None]
         best_gap = None
-        best_candidates = []
+        best_candidate = None
 
         first_kept = dt(current[0])
-        first_dropped = [post for post in ordered if post["id"] not in restored and dt(post) is not None]
         if first_kept is not None:
-            earlier = [post for post in first_dropped if dt(post) < first_kept]
+            earlier = [post for post in dropped if dt(post) < first_kept]
             if earlier:
                 nearest = max(earlier, key=lambda post: dt(post))
                 gap = first_kept - dt(nearest)
                 if gap > MAX_SEMANTIC_COVERAGE_GAP:
                     best_gap = gap
-                    best_candidates = [nearest]
+                    best_candidate = nearest
 
         last_kept = dt(current[-1])
         if last_kept is not None:
-            later = [post for post in first_dropped if dt(post) > last_kept]
+            later = [post for post in dropped if dt(post) > last_kept]
             if later:
                 nearest = min(later, key=lambda post: dt(post))
                 gap = dt(nearest) - last_kept
                 if gap > (best_gap or MAX_SEMANTIC_COVERAGE_GAP):
                     best_gap = gap
-                    best_candidates = [nearest]
+                    best_candidate = nearest
 
         for left, right in zip(current, current[1:]):
             left_dt = dt(left)
@@ -253,24 +254,20 @@ def _restore_temporal_coverage(posts, kept_posts):
             gap = right_dt - left_dt
             if gap <= MAX_SEMANTIC_COVERAGE_GAP:
                 continue
-            between = [post for post in first_dropped if left_dt < dt(post) < right_dt]
+            between = [post for post in dropped if left_dt < dt(post) < right_dt]
             if between and (best_gap is None or gap > best_gap):
                 best_gap = gap
-                best_candidates = [min(between, key=lambda post: dt(post))]
+                best_candidate = min(between, key=lambda post: dt(post))
 
-        if not best_candidates:
+        if best_candidate is None:
             break
-        for post in best_candidates:
-            restored.add(post["id"])
-        
-    restored_posts = [post for post in ordered if post["id"] in restored]
-    return restored_posts
+        restored.add(best_candidate["id"])
+
+    return [post for post in ordered if post["id"] in restored]
 
 
 def semantic_deduplicate_with_temporal_guard(client, posts):
-    original = getattr(digest, "_base_semantic_deduplicate", None)
-    if original is None:
-        return digest.semantic_deduplicate(client, posts)
+    original = getattr(digest, "_base_semantic_deduplicate", BASE_SEMANTIC_DEDUPLICATE)
     kept, dropped = original(client, posts)
     protected = _restore_temporal_coverage(posts, kept)
     restored = len(protected) - len(kept)
