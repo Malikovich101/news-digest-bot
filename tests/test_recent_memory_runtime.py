@@ -163,10 +163,12 @@ class RecentMemoryTests(unittest.TestCase):
 
         kept = memory._restore_temporal_coverage(posts, [posts[-1]])
         kept_dates = [datetime.fromisoformat(item["date"]) for item in kept]
+        earliest_date = datetime.fromisoformat(posts[0]["date"])
         self.assertEqual(kept_dates, sorted(kept_dates))
         self.assertEqual([item["id"] for item in kept], [
-            "@current:0", "@current:2", "@current:3", "@current:4"
+            "@current:2", "@current:3", "@current:4"
         ])
+        self.assertLessEqual(kept_dates[0] - earliest_date, memory.MAX_SEMANTIC_COVERAGE_GAP)
         self.assertTrue(all(
             right - left <= memory.MAX_SEMANTIC_COVERAGE_GAP
             for left, right in zip(kept_dates, kept_dates[1:])
