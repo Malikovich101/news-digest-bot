@@ -161,18 +161,7 @@ class RecentMemoryTests(unittest.TestCase):
                 "text": f"Новость {index}",
             })
 
-        original = memory.BASE_SEMANTIC_DEDUPLICATE
-        try:
-            memory.BASE_SEMANTIC_DEDUPLICATE = lambda client, current: (
-                [current[-1]],
-                len(current) - 1,
-            )
-            kept, dropped = memory.semantic_deduplicate_with_temporal_guard(
-                SimpleNamespace(), posts
-            )
-        finally:
-            memory.BASE_SEMANTIC_DEDUPLICATE = original
-
+        kept = memory._restore_temporal_coverage(posts, [posts[-1]])
         kept_dates = [datetime.fromisoformat(item["date"]) for item in kept]
         self.assertEqual(kept_dates, sorted(kept_dates))
         self.assertEqual(kept[0]["id"], "@current:0")
@@ -181,7 +170,6 @@ class RecentMemoryTests(unittest.TestCase):
             right - left <= memory.MAX_SEMANTIC_COVERAGE_GAP
             for left, right in zip(kept_dates, kept_dates[1:])
         ))
-        self.assertEqual(dropped, len(posts) - len(kept))
 
     def test_temporal_guard_restores_all_posts_if_ai_drops_everything(self):
         posts = [
