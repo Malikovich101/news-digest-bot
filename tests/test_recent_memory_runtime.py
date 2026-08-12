@@ -151,6 +151,59 @@ class RecentMemoryTests(unittest.TestCase):
         self.assertEqual(kept, posts)
         self.assertEqual(suppressed, 0)
 
+    def test_temporal_guard_restores_posts_from_large_gap(self):
+        start = datetime(2026, 8, 11, 16, tzinfo=timezone.utc)
+        posts = []
+        for index, hours in enumerate([0, 1, 2, 4, 4.5]):
+            posts.append({
+                "id": f"@current:{index}",
+                "date": (start + timedelta(hours=hours)).isoformat(),
+                "text": f"Новость {index}",
+            })
+
+        original = memory.digest._base_semantic_deduplicate
+        try:
+            memory.digest._base_semantic_deduplicate = lambda client, current: (
+                [current[-1]],
+                len(current) - 1,
+            )
+            kept, dropped = memory.semantic_deduplicate_with_temporal_guard(
+                SimpleNamespace(), posts
+            )
+        finally:
+            memory.digest._base_semantic_deduplicate = original
+
+        self.assertEqual([item["id"] for item in kept], [
+            "@current:0", "@current:2", "@current:3", "@current:4"
+        ])
+        self.assertEqual(dropped, 1)
+
+    def test_temporal_guard_restores_all_posts_if_ai_drops_everything(self):
+        posts = [
+            {
+                "id": "@current:1",
+                "date": "2026-08-11T16:00:00+00:00",
+                "text": "Новость 1",
+            },
+            {
+                "id": "@current:2",
+                "date": "2026-08-11T20:00:00+00:00",
+                "text": "Новость 2",
+            },
+        ]
+
+        original = memory.digest._base_semantic_deduplicate
+        try:
+            memory.digest._base_semantic_deduplicate = lambda client, current: ([], len(current))
+            kept, dropped = memory.semantic_deduplicate_with_temporal_guard(
+                SimpleNamespace(), posts
+            )
+        finally:
+            memory.digest._base_semantic_deduplicate = original
+
+        self.assertEqual(kept, posts)
+        self.assertEqual(dropped, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
