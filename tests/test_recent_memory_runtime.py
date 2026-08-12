@@ -161,9 +161,9 @@ class RecentMemoryTests(unittest.TestCase):
                 "text": f"Новость {index}",
             })
 
-        original = memory.digest._base_semantic_deduplicate
+        original = memory.BASE_SEMANTIC_DEDUPLICATE
         try:
-            memory.digest._base_semantic_deduplicate = lambda client, current: (
+            memory.BASE_SEMANTIC_DEDUPLICATE = lambda client, current: (
                 [current[-1]],
                 len(current) - 1,
             )
@@ -171,7 +171,7 @@ class RecentMemoryTests(unittest.TestCase):
                 SimpleNamespace(), posts
             )
         finally:
-            memory.digest._base_semantic_deduplicate = original
+            memory.BASE_SEMANTIC_DEDUPLICATE = original
 
         self.assertEqual([item["id"] for item in kept], [
             "@current:0", "@current:2", "@current:3", "@current:4"
@@ -192,14 +192,14 @@ class RecentMemoryTests(unittest.TestCase):
             },
         ]
 
-        original = memory.digest._base_semantic_deduplicate
+        original = memory.BASE_SEMANTIC_DEDUPLICATE
         try:
-            memory.digest._base_semantic_deduplicate = lambda client, current: ([], len(current))
+            memory.BASE_SEMANTIC_DEDUPLICATE = lambda client, current: ([], len(current))
             kept, dropped = memory.semantic_deduplicate_with_temporal_guard(
                 SimpleNamespace(), posts
             )
         finally:
-            memory.digest._base_semantic_deduplicate = original
+            memory.BASE_SEMANTIC_DEDUPLICATE = original
 
         self.assertEqual(kept, posts)
         self.assertEqual(dropped, 0)
