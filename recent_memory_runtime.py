@@ -166,10 +166,16 @@ def collect_posts(client, channels, state, now, replay_hours=0):
             f"Digest time window: suppressed {suppressed} messages at or before "
             "the previous successful channel check."
         )
+    if failed_channels:
+        failed = set(failed_channels)
+        for channel in failed:
+            if channel in state.get("channels", {}):
+                next_state.setdefault("channels", {})[channel] = dict(state["channels"][channel])
+            else:
+                next_state.setdefault("channels", {}).pop(channel, None)
     return filtered, next_state, failed_channels
 
 
-# Capture the original collector before install() replaces it.
 digest._base_collect_posts = digest.collect_posts
 collect_posts._original = digest._base_collect_posts
 
