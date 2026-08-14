@@ -5,13 +5,25 @@ from unittest.mock import patch
 import digest_pipeline
 
 
+def post(source_id, date, text):
+    channel, message_id = source_id.split(":")
+    return {
+        "id": source_id,
+        "channel": channel,
+        "message_id": int(message_id),
+        "date": date,
+        "text": text,
+        "url": f"https://t.me/{channel.lstrip('@')}/{message_id}",
+    }
+
+
 class DigestPipelineTests(unittest.TestCase):
     def test_telegram_chunks_are_rate_limited(self):
         pipeline = digest_pipeline.DigestPipeline(state_file="/tmp/news-digest-test-state.json")
         state = {"version": 5, "delivered_chunks": [], "delivered_ids": [], "recent_news": [], "channels": {}}
         posts = [
-            {"id": "@one:1", "url": "https://t.me/one/1", "text": "A" * 100},
-            {"id": "@two:2", "url": "https://t.me/two/2", "text": "B" * 100},
+            post("@one:1", "2026-08-14T10:00:00+00:00", "A" * 100),
+            post("@two:2", "2026-08-14T10:01:00+00:00", "B" * 100),
         ]
         text = "\n────────────\n".join([
             "A" * 2000 + "\nИсточник: https://t.me/one/1",
@@ -33,25 +45,47 @@ class DigestPipelineTests(unittest.TestCase):
         self.assertGreaterEqual(sleep.call_count, 2)
         sleep.assert_any_call(digest_pipeline.CHUNK_DELAY_SECONDS)
 
-    def test_collection_updates_are_pending_until_after_delivery(self):
+    def test_temporal_barrier_removes_overlap_per_channel(self):
         pipeline = digest_pipeline.DigestPipeline()
         state = {
             "channels": {
-                "@news": {"last_checked_at": "2026-08-14T10:00:00+00:00", "last_message_id": 10}
-            },
-            "delivered_ids": [],
+                "@news": {
+                    "last_checked_at": "2026-08-14T15:01:00+00:00",
+                    "last_message_id": 100,
+                }
+            }
         }
-        client = SimpleNamespace(iter_messages=lambda channel, min_id=0: [])
-        posts, updates, failed = pipeline.collect_posts(
-            client,
-            ["@news"],
-            state,
-            pipeline.parse_datetime("2026-08-14T12:00:00+00:00"),
-        )
-        self.assertEqual(posts, [])
-        self.assertEqual(failed, [])
-        self.assertEqual(state["channels"]["@news"]["last_checked_at"], "2026-08-14T10:00:00+00:00")
-        self.assertEqual(updates["@news"]["last_checked_at"], "2026-08-14T12:00:00+00:00")
+        posts = [
+            post("@news:101", "2026-08-14T12:07:00+00:00", "old"),
+            post("@news:102", "2026-08-14T15:01:00+00:00", "boundary"),
+            post("@news:103", "2026-08-14T15:02:00+00:00", "new"),
+        ]
+        filtered, suppressed = pipeline.filter_posts_after_last_check(posts, state)
+        self.assertEqual([item["id"] for item in filtered], ["@news:103"])
+        self.assertEqual(suppressed, 2)
+
+    def test_replay_bypasses_normal_temporal_barrier(self):
+        pipeline = digest_pipeline.DigestPipeline()
+        state = {"channels": {"@news": {"last_checked_at": "2026-08-14T15:01:00+00:00"}}}
+        posts = [post("@news:101", "2026-08-14T12:07:00+00:00", "old")]
+        filtered, suppressed = pipeline.filter_posts_after_last_check(posts, state, replay_hours=1)
+        self.assertEqual(filtered, posts)
+        self.assertEqual(suppressed, 0)
+
+    def test_semantic_duplicate_keeps_earliest_publication(self):
+        pipeline = digest_pipeline.DigestPipeline()
+        posts = [
+            post("@early:1", "2026-08-14T21:10:00+00:00", "Компания представила новый продукт вчера вечером."),
+            post("@late:2", "2026-08-15T01:18:00+00:00", "Компания представила новый продукт вчера вечером по данным канала."),
+        ]
+
+        with patch("digest_pipeline.digest.generate_json", return_value={
+            "groups": [{"ids": ["@late:2", "@early:1"]}]
+        }):
+            kept, dropped = pipeline.semantic_deduplicate(SimpleNamespace(), posts)
+
+        self.assertEqual([item["id"] for item in kept], ["@early:1"])
+        self.assertEqual(dropped, 1)
 
 
 if __name__ == "__main__":
