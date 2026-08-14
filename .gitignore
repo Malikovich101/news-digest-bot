@@ -2,3 +2,8 @@ __pycache__/
 *.py[cod]
 .env
 *.session
+
+# Runtime state files
+state.json
+state.json.tmp
+bot_offset.json
