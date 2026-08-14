@@ -1,12 +1,8 @@
 import digest as digest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 import os
 import re
-
-
-MAX_SEMANTIC_COVERAGE_GAP = timedelta(hours=2)
-BASE_SEMANTIC_DEDUPLICATE = digest.semantic_deduplicate
 
 
 def install(digest_module):
@@ -17,8 +13,6 @@ def install(digest_module):
     digest.prune_recent_news = prune_recent_news
     digest.cross_run_semantic_deduplicate = cross_run_semantic_deduplicate
     digest.collect_posts = collect_posts
-    digest._base_semantic_deduplicate = BASE_SEMANTIC_DEDUPLICATE
-    digest.semantic_deduplicate = semantic_deduplicate_with_temporal_guard
 
 
 def parse_datetime(value, fallback):
@@ -40,7 +34,7 @@ def normalize_text(text):
 
 
 def prune_recent_news(recent_news, now):
-    cutoff = now - timedelta(hours=36)
+    cutoff = now - digest.timedelta(hours=digest.RECENT_NEWS_HOURS)
     valid = []
     for item in recent_news or []:
         if not isinstance(item, dict):
@@ -57,14 +51,14 @@ def prune_recent_news(recent_news, now):
             "id": item_id,
             "date": date,
             "delivered_at": delivered_at.isoformat(),
-            "text": normalize_text(text)[:500],
+            "text": normalize_text(text)[:digest.MAX_RECENT_NEWS_CHARS],
         })
     valid.sort(key=lambda item: item["delivered_at"], reverse=True)
     return valid
 
 
 def load_state():
-    state_file = "state.json"
+    state_file = digest.STATE_FILE
     if not os.path.exists(state_file):
         return {
             "version": 5,
@@ -78,8 +72,8 @@ def load_state():
     return {
         "version": 5,
         "channels": state.get("channels", {}),
-        "delivered_ids": list(state.get("delivered_ids", []))[-2000:],
-        "delivered_chunks": list(state.get("delivered_chunks", []))[-2000:],
+        "delivered_ids": list(state.get("delivered_ids", []))[-digest.MAX_DELIVERED_IDS:],
+        "delivered_chunks": list(state.get("delivered_chunks", []))[-digest.MAX_DELIVERED_CHUNKS:],
         "recent_news": prune_recent_news(state.get("recent_news", []), utc_now()),
         "legacy_last_run": state.get("last_run"),
     }
@@ -88,15 +82,15 @@ def load_state():
 def save_state(state):
     state.pop("legacy_last_run", None)
     state["version"] = 5
-    state["delivered_ids"] = list(dict.fromkeys(state.get("delivered_ids", [])))[-2000:]
-    state["delivered_chunks"] = list(dict.fromkeys(state.get("delivered_chunks", [])))[-2000:]
+    state["delivered_ids"] = list(dict.fromkeys(state.get("delivered_ids", [])))[-digest.MAX_DELIVERED_IDS:]
+    state["delivered_chunks"] = list(dict.fromkeys(state.get("delivered_chunks", [])))[-digest.MAX_DELIVERED_CHUNKS:]
     state["recent_news"] = prune_recent_news(state.get("recent_news", []), utc_now())
-    temp_file = "state.json.tmp"
+    temp_file = digest.STATE_FILE + ".tmp"
     with open(temp_file, "w", encoding="utf-8") as output:
         json.dump(state, output, ensure_ascii=False, indent=2, sort_keys=True)
         output.flush()
         os.fsync(output.fileno())
-    os.replace(temp_file, state_file := "state.json")
+    os.replace(temp_file, digest.STATE_FILE)
 
 
 def comparison_tokens(text):
@@ -172,10 +166,17 @@ def collect_posts(client, channels, state, now, replay_hours=0):
             f"Digest time window: suppressed {suppressed} messages at or before "
             "the previous successful channel check."
         )
+    if failed_channels:
+        failed = set(failed_channels)
+        # Never advance or invent a watermark for a channel whose collection failed.
+        for channel in failed:
+            if channel in state.get("channels", {}):
+                next_state.setdefault("channels", {})[channel] = dict(state["channels"][channel])
+            else:
+                next_state.setdefault("channels", {}).pop(channel, None)
     return filtered, next_state, failed_channels
 
 
-# Capture the original collector before install() replaces it.
 digest._base_collect_posts = digest.collect_posts
 collect_posts._original = digest._base_collect_posts
 
@@ -193,8 +194,8 @@ def cross_run_semantic_deduplicate(client, posts, recent_news):
         )
         if not history_candidates:
             continue
-        for start in range(0, len(history_candidates), 40):
-            history_batch = history_candidates[start:start + 40]
+        for start in range(0, len(history_candidates), digest.RECENT_NEWS_HISTORY_BATCH):
+            history_batch = history_candidates[start:start + digest.RECENT_NEWS_HISTORY_BATCH]
             response = digest.generate_json(
                 client,
                 digest.recent_news_prompt(current_batch, history_batch),
@@ -206,75 +207,3 @@ def cross_run_semantic_deduplicate(client, posts, recent_news):
                 )
             )
     return [post for post in posts if post["id"] not in dropped], len(dropped)
-
-
-def _restore_temporal_coverage(posts, kept_posts):
-    if not posts:
-        return kept_posts
-    ordered = sorted(posts, key=lambda post: post.get("date", ""))
-    kept_ids = {post["id"] for post in kept_posts}
-    if not kept_ids:
-        return ordered
-
-    def dt(post):
-        return parse_datetime(post.get("date"), None)
-
-    restored = set(kept_ids)
-    earliest_dt = dt(ordered[0])
-    latest_dt = dt(ordered[-1])
-
-    while True:
-        current = [post for post in ordered if post["id"] in restored]
-        dropped = [post for post in ordered if post["id"] not in restored and dt(post) is not None]
-        best_gap = None
-        best_candidate = None
-
-        first_kept = dt(current[0])
-        if first_kept is not None and earliest_dt is not None:
-            boundary_gap = first_kept - earliest_dt
-            if boundary_gap > MAX_SEMANTIC_COVERAGE_GAP:
-                earlier = [post for post in dropped if dt(post) < first_kept]
-                if earlier:
-                    best_gap = boundary_gap
-                    best_candidate = max(earlier, key=lambda post: dt(post))
-
-        last_kept = dt(current[-1])
-        if last_kept is not None and latest_dt is not None:
-            boundary_gap = latest_dt - last_kept
-            if boundary_gap > MAX_SEMANTIC_COVERAGE_GAP:
-                later = [post for post in dropped if dt(post) > last_kept]
-                if later and (best_gap is None or boundary_gap > best_gap):
-                    best_gap = boundary_gap
-                    best_candidate = min(later, key=lambda post: dt(post))
-
-        for left, right in zip(current, current[1:]):
-            left_dt = dt(left)
-            right_dt = dt(right)
-            if left_dt is None or right_dt is None:
-                continue
-            gap = right_dt - left_dt
-            if gap <= MAX_SEMANTIC_COVERAGE_GAP:
-                continue
-            between = [post for post in dropped if left_dt < dt(post) < right_dt]
-            if between and (best_gap is None or gap > best_gap):
-                best_gap = gap
-                best_candidate = max(between, key=lambda post: dt(post))
-
-        if best_candidate is None:
-            break
-        restored.add(best_candidate["id"])
-
-    return [post for post in ordered if post["id"] in restored]
-
-
-def semantic_deduplicate_with_temporal_guard(client, posts):
-    original = getattr(digest, "_base_semantic_deduplicate", BASE_SEMANTIC_DEDUPLICATE)
-    kept, dropped = original(client, posts)
-    protected = _restore_temporal_coverage(posts, kept)
-    restored = len(protected) - len(kept)
-    if restored:
-        print(
-            f"Semantic deduplication restored {restored} posts to preserve "
-            f"time coverage (max gap {MAX_SEMANTIC_COVERAGE_GAP})."
-        )
-    return protected, max(0, dropped - restored)
