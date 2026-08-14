@@ -180,6 +180,24 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in kept], ["@current:11"])
         self.assertEqual(dropped, 1)
 
+    def test_cross_run_memory_does_not_rely_on_message_id_alone(self):
+        current_posts = [post("Apple представила новый iPhone X на презентации.", "@second_channel:77")]
+        history = [{
+            "id": "@first_channel:15",
+            "date": "2026-07-30T09:00:00+00:00",
+            "delivered_at": "2026-07-30T09:10:00+00:00",
+            "text": "Apple представила новый iPhone X на презентации.",
+        }]
+
+        class Models:
+            def generate_content(self, model, contents, config):
+                return SimpleNamespace(text='{"repeats":["@second_channel:77"]}')
+
+        client = SimpleNamespace(models=Models())
+        kept, dropped = cross_run_semantic_deduplicate(client, current_posts, history)
+        self.assertEqual(kept, [])
+        self.assertEqual(dropped, 1)
+
     def test_watermark_moves_only_for_a_successful_channel(self):
         now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
 
