@@ -87,6 +87,29 @@ class DigestPipelineTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in kept], ["@early:1"])
         self.assertEqual(dropped, 1)
 
+    def test_failed_channel_does_not_advance_watermark(self):
+        pipeline = digest_pipeline.DigestPipeline()
+        state = {
+            "channels": {
+                "@ok": {"last_checked_at": "2026-08-14T10:00:00+00:00", "last_message_id": 10},
+                "@broken": {"last_checked_at": "2026-08-14T10:00:00+00:00", "last_message_id": 20},
+            },
+            "delivered_ids": [],
+        }
+        now = pipeline.parse_datetime("2026-08-14T12:00:00+00:00")
+
+        class Client:
+            def iter_messages(self, channel, min_id=0):
+                if channel == "@broken":
+                    raise RuntimeError("network unavailable")
+                return []
+
+        posts, updates, failed = pipeline.collect_posts(Client(), ["@ok", "@broken"], state, now)
+        self.assertEqual(posts, [])
+        self.assertEqual(failed, ["@broken"])
+        self.assertEqual(updates["@ok"]["last_checked_at"], now.isoformat())
+        self.assertNotIn("@broken", updates)
+
 
 if __name__ == "__main__":
     unittest.main()
