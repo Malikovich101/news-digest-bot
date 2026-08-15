@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import requests
 
-import digest
+from digest_pipeline import DigestPipeline
 
 
 def post(text, source_id):
@@ -24,8 +24,15 @@ class DeliveryIdempotencyTests(unittest.TestCase):
         first = "A" * 3500
         second = "B" * 3500
         posts = [post(first, "@one:1"), post(second, "@two:2")]
-        text = "header\n────────────\n" + first + "\nИсточник: https://t.me/one/1\n────────────\n" + second + "\nИсточник: https://t.me/two/2"
+        text = (
+            "header\n────────────\n"
+            + first
+            + "\nИсточник: https://t.me/one/1\n────────────\n"
+            + second
+            + "\nИсточник: https://t.me/two/2"
+        )
         state = {"version": 5, "channels": {}, "delivered_ids": [], "delivered_chunks": []}
+        pipeline = DigestPipeline(state_file="/tmp/news-digest-delivery-test.json")
 
         class Response:
             def raise_for_status(self):
@@ -38,13 +45,15 @@ class DeliveryIdempotencyTests(unittest.TestCase):
 
         def send(url, data, timeout):
             calls.append(data["text"])
-            if len(calls) == 2:
+            if len(calls) >= 2:
                 raise requests.ConnectionError("network unavailable")
             return Response()
 
-        with patch.object(digest.requests, "post", side_effect=send), patch.object(digest.time, "sleep"):
+        with patch.object(pipeline, "save_state"), \
+             patch("digest_pipeline.requests.post", side_effect=send), \
+             patch("digest_pipeline.time.sleep"):
             with self.assertRaises(RuntimeError):
-                digest.send_telegram_message("token", "chat", text, state=state, posts=posts)
+                pipeline.send_telegram("token", "chat", text, state=state, posts=posts)
 
         self.assertEqual(state["delivered_ids"], ["@one:1"])
 
