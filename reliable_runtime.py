@@ -8,8 +8,7 @@ from digest_pipeline import (
     DigestPipeline,
     cross_run_semantic_deduplicate,
     filter_and_deduplicate,
-    format_digest,
-    genai as _unused_genai,
+    format_post_time,
     load_channels,
     require_environment,
     replay_hours_from_environment,
@@ -19,8 +18,6 @@ from digest_pipeline import (
     watchdog_check,
     chunk_checkpoint_id,
     telegram_chunks,
-    PERM_TIMEZONE,
-    MAX_PREVIEW_CHARS,
 )
 
 
@@ -45,7 +42,7 @@ def _build_header(stats, semantic_duplicates, confirmed_ads, cross_run_duplicate
 def _post_block(post):
     return "\n".join([
         "────────────",
-        f"🕒 {post['date']} · {post['channel']}",
+        f"🕒 {format_post_time(post['date'])} · {post['channel']}",
         post["text"],
         f"Источник: {post['url']}",
     ])
@@ -59,9 +56,7 @@ def build_delivery_chunks(posts, stats, semantic_duplicates, confirmed_ads, cros
     records = [{"id": chunk_checkpoint_id(header), "text": header, "post_ids": []}]
 
     for post in posts:
-        block = _post_block(post)
-        block_parts = list(telegram_chunks(block))
-        for part in block_parts:
+        for part in telegram_chunks(_post_block(post)):
             records.append({"id": chunk_checkpoint_id(part), "text": part, "post_ids": [post["id"]]})
 
     for warning in warnings or []:
@@ -116,13 +111,11 @@ def run_reliable_digest():
             client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
             posts, confirmed_ads = review_suspicious_ads(client, candidates)
             if replay_hours == 0:
-                history = []
                 by_id = {}
                 for item in state.get("recent_news", []) + state.get("event_memory", []):
                     if isinstance(item, dict) and item.get("id"):
                         by_id[item["id"]] = item
-                history = list(by_id.values())
-                posts, cross_run_duplicates = cross_run_semantic_deduplicate(client, posts, history)
+                posts, cross_run_duplicates = cross_run_semantic_deduplicate(client, posts, list(by_id.values()))
             posts, semantic_duplicates = semantic_deduplicate(client, posts)
         except RuntimeError as error:
             ai_unavailable = True
@@ -131,8 +124,7 @@ def run_reliable_digest():
 
     collected_ids = {post["id"] for post in collected}
     final_ids = {post["id"] for post in posts}
-    resolved_without_delivery = collected_ids - final_ids
-    for post_id in resolved_without_delivery:
+    for post_id in collected_ids - final_ids:
         state.get("pending_posts", {}).pop(post_id, None)
     pipeline.save_state(state)
 
