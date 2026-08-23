@@ -1,23 +1,30 @@
 import os
+import time
+from collections import defaultdict
 
+import requests
 from google import genai
 from telethon.sessions import StringSession
 from telethon.sync import TelegramClient
 
 from digest_pipeline import (
+    CHUNK_DELAY_SECONDS,
+    MAX_DELIVERED_CHUNKS,
+    MAX_DELIVERED_IDS,
+    RETRY_ATTEMPTS,
     DigestPipeline,
+    chunk_checkpoint_id,
     cross_run_semantic_deduplicate,
     filter_and_deduplicate,
     format_post_time,
     load_channels,
-    require_environment,
     replay_hours_from_environment,
+    require_environment,
     review_suspicious_ads,
     semantic_deduplicate,
+    telegram_chunks,
     utc_now,
     watchdog_check,
-    chunk_checkpoint_id,
-    telegram_chunks,
 )
 
 
@@ -63,6 +70,57 @@ def build_delivery_chunks(posts, stats, semantic_duplicates, confirmed_ads, cros
         records.append({"id": chunk_checkpoint_id(warning), "text": warning, "post_ids": []})
 
     return records
+
+
+def send_reliable_chunks(token, chat_id, state, records, pipeline):
+    """Deliver chunks idempotently; keep a post pending until every chunk of it is sent."""
+    receipts = state.setdefault("delivery_receipts", {})
+    completed = set(state.get("delivered_chunks", [])) | set(receipts)
+    post_checkpoints = defaultdict(set)
+    for record in records:
+        for post_id in record.get("post_ids", []):
+            post_checkpoints[post_id].add(record["id"])
+
+    for index, record in enumerate(records):
+        checkpoint = record["id"]
+        if checkpoint in completed:
+            continue
+
+        last_error = None
+        for attempt in range(RETRY_ATTEMPTS):
+            try:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    data={"chat_id": chat_id, "text": record["text"]},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not payload.get("ok"):
+                    raise requests.RequestException(payload.get("description", "Telegram API rejected the message"))
+                time.sleep(CHUNK_DELAY_SECONDS)
+                break
+            except requests.RequestException as error:
+                last_error = error
+                if attempt < RETRY_ATTEMPTS - 1:
+                    time.sleep(2 ** attempt)
+        else:
+            raise RuntimeError(f"Telegram delivery failed on chunk {index + 1}/{len(records)}: {last_error}")
+
+        receipts[checkpoint] = {"sent_at": utc_now().isoformat(), "post_ids": record.get("post_ids", [])}
+        state["delivered_chunks"] = list(dict.fromkeys(state.get("delivered_chunks", []) + [checkpoint]))[-MAX_DELIVERED_CHUNKS:]
+        completed.add(checkpoint)
+
+        for post_id in record.get("post_ids", []):
+            required = post_checkpoints[post_id]
+            if required.issubset(completed):
+                state.setdefault("pending_posts", {}).pop(post_id, None)
+                state.setdefault("delivered_ids", []).append(post_id)
+
+        state["delivered_ids"] = list(dict.fromkeys(state.get("delivered_ids", [])))[-MAX_DELIVERED_IDS:]
+        pipeline.save_state(state)
+
+    pipeline.save_state(state)
 
 
 def run_reliable_digest():
@@ -151,14 +209,7 @@ def run_reliable_digest():
         records = [{"id": chunk_checkpoint_id(empty_text), "text": empty_text, "post_ids": []}]
         records.extend({"id": chunk_checkpoint_id(w), "text": w, "post_ids": []} for w in warnings)
 
-    pipeline.send_telegram(
-        os.environ["TG_BOT_TOKEN"],
-        os.environ["TG_CHAT_ID"],
-        "",
-        state,
-        posts,
-        rendered_chunks=records,
-    )
+    send_reliable_chunks(os.environ["TG_BOT_TOKEN"], os.environ["TG_CHAT_ID"], state, records, pipeline)
 
     if replay_hours == 0:
         delivered_at = utc_now()
