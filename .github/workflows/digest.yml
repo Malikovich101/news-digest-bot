@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: refactor/reliable-digest-pipeline
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
@@ -39,10 +39,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: news-digest-state-${{ github.ref_name }}-${{ github.run_id }}
+          key: news-digest-state-main-${{ github.run_id }}
           restore-keys: |
-            news-digest-state-${{ github.ref_name }}-
             news-digest-state-main-
+            news-digest-state-
 
       - name: Migrate existing tracked state on first cache miss
         if: steps.restore-state.outputs.cache-hit != 'true'
@@ -97,4 +97,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: news-digest-state-${{ github.ref_name }}-${{ github.run_id }}
+          key: news-digest-state-main-${{ github.run_id }}
