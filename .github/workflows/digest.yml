@@ -12,6 +12,7 @@ on:
         required: false
         default: '0'
         type: string
+  pull_request:
 
 concurrency:
   group: news-digest-runtime-state
@@ -82,6 +83,7 @@ jobs:
           python -m unittest discover -s tests -v
 
       - name: Run digest script
+        if: github.event_name != 'pull_request'
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
@@ -93,7 +95,7 @@ jobs:
         run: python run_digest.py
 
       - name: Save runtime state
-        if: always() && hashFiles('state.json') != ''
+        if: always() && github.event_name != 'pull_request' && hashFiles('state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: state.json
