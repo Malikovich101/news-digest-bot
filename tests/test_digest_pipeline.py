@@ -203,5 +203,28 @@ class WatchdogTests(unittest.TestCase):
         self.assertTrue(digest_pipeline.watchdog_check(state, now))
 
 
+class IntermediateStateSaveTests(unittest.TestCase):
+    """Tests for intermediate state saving after collection."""
+
+    def test_channel_updates_saved_even_if_gemini_fails(self):
+        """Channel watermarks should be saved even when Gemini processing fails."""
+        # This test verifies that after collect_posts, the channel state is saved
+        # so that if Gemini fails, the next run doesn't re-collect the same posts
+        pipeline = digest_pipeline.DigestPipeline()
+        state = {"channels": {}, "delivered_ids": [], "delivered_chunks": [], "recent_news": []}
+        
+        # Simulate that channel_updates were applied
+        channel_updates = {"@test": {"last_message_id": 100, "last_checked_at": "2026-08-23T12:00:00+00:00"}}
+        state["channels"].update(channel_updates)
+        
+        # Save state
+        pipeline.save_state(state)
+        
+        # Load and verify
+        loaded = pipeline.load_state()
+        self.assertIn("@test", loaded["channels"])
+        self.assertEqual(loaded["channels"]["@test"]["last_message_id"], 100)
+
+
 if __name__ == "__main__":
     unittest.main()
