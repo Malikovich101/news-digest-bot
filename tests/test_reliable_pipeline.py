@@ -68,7 +68,7 @@ class ReliablePipelineTests(unittest.TestCase):
         calls = []
         def send(url, data, timeout):
             calls.append(data["text"])
-            if len(calls) == 2: raise requests.ConnectionError("network unavailable")
+            if data["text"] == "second": raise requests.ConnectionError("network unavailable")
             return Response()
         with patch("digest_pipeline.requests.post", side_effect=send), patch("digest_pipeline.time.sleep"), patch.object(pipeline, "save_state"):
             with self.assertRaises(RuntimeError): pipeline.send_telegram("token", "chat", "ignored", state, posts, rendered_chunks=chunks)
