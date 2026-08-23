@@ -20,7 +20,8 @@ class DeliveryRegressionTests(unittest.TestCase):
         calls=[]
         def send(url, data, timeout):
             calls.append(data["text"])
-            if len(calls) == 2: raise requests.ConnectionError("network unavailable")
+            if data["text"] == "second":
+                raise requests.ConnectionError("network unavailable")
             return Response()
         pipeline = DigestPipeline(state_file="/tmp/news-digest-delivery-regression.json")
         with patch.object(pipeline, "save_state"), patch("digest_pipeline.requests.post", side_effect=send), patch("digest_pipeline.time.sleep"):
