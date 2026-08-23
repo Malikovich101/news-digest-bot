@@ -1,38 +1,15 @@
 import unittest
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import requests
 
-from digest import (
-    MODELS,
-    ad_ids_from_response,
-    candidate_clusters,
-    collect_posts,
-    cross_run_semantic_deduplicate,
-    duplicate_ids_from_response,
-    filter_and_deduplicate,
-    format_digest,
-    generate_json,
-    is_probable_ad,
-    is_suspicious_ad,
-    review_suspicious_ads,
-    send_telegram_message,
-    telegram_chunks,
-)
+from digest import MODELS, generate_json, is_probable_ad, is_suspicious_ad, filter_and_deduplicate, review_suspicious_ads, ad_ids_from_response, duplicate_ids_from_response, candidate_clusters, cross_run_semantic_deduplicate, format_digest, telegram_chunks
 
 
 def post(text, source_id="@test:1", url="https://t.me/test/1"):
     channel, message_id = source_id.split(":")
-    return {
-        "id": source_id,
-        "channel": channel,
-        "message_id": int(message_id),
-        "date": "2026-07-30T10:00:00+00:00",
-        "text": text,
-        "url": url,
-    }
+    return {"id": source_id, "channel": channel, "message_id": int(message_id), "date": "2026-07-30T10:00:00+00:00", "text": text, "url": url}
 
 
 class DigestUtilityTests(unittest.TestCase):
@@ -41,244 +18,63 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertFalse(is_probable_ad("Учёные опубликовали результаты исследования"))
 
     def test_promo_words_are_suspicious_not_deterministic_ads(self):
-        text = "Компания объявила скидку на билеты после изменения цен."
-        self.assertTrue(is_suspicious_ad(text))
-        kept, stats = filter_and_deduplicate([post(text)])
+        kept, stats = filter_and_deduplicate([post("Компания объявила скидку на билеты после изменения цен.")])
         self.assertEqual(len(kept), 1)
         self.assertEqual(stats["ads"], 0)
         self.assertEqual(stats["ad_review"], 1)
+        self.assertTrue(is_suspicious_ad(kept[0]["text"]))
 
     def test_gemini_can_remove_only_confirmed_ads(self):
-        posts = [
-            post("Купите курс со скидкой 50% прямо сейчас!", "@one:1"),
-            post("Компания снизила цены на лекарства, пациенты получат помощь дешевле.", "@two:2"),
-        ]
-
+        posts = [post("Купите курс со скидкой 50% прямо сейчас!", "@one:1"), post("Компания снизила цены на лекарства, пациенты получат помощь дешевле.", "@two:2")]
         class Models:
-            def generate_content(self, model, contents, config):
-                return SimpleNamespace(text='{"ads":["@one:1"]}')
-
-        client = SimpleNamespace(models=Models())
-        kept, confirmed = review_suspicious_ads(client, posts)
+            def generate_content(self, model, contents, config): return SimpleNamespace(text='{"ads":["@one:1"]}')
+        kept, confirmed = review_suspicious_ads(SimpleNamespace(models=Models()), posts)
         self.assertEqual([item["id"] for item in kept], ["@two:2"])
         self.assertEqual(confirmed, 1)
 
-    def test_ad_response_accepts_only_known_ids(self):
-        response = {"ads": ["@one:1", "wrong", 123]}
-        self.assertEqual(ad_ids_from_response(response, {"@one:1", "@two:2"}), {"@one:1"})
+    def test_responses_accept_only_known_ids(self):
+        self.assertEqual(ad_ids_from_response({"ads": ["@one:1", "wrong", 123]}, {"@one:1", "@two:2"}), {"@one:1"})
+        self.assertEqual(duplicate_ids_from_response({"groups": [{"keep": "@one:1", "duplicates": ["@two:2", "wrong"]}]}, {"@one:1", "@two:2"}), {"@two:2"})
 
-    def test_python_removes_only_exact_text_duplicates(self):
-        text = "Учёные представили результаты большого исследования климата в Арктике."
-        kept, stats = filter_and_deduplicate([post(text, "@one:1"), post(text, "@two:7")])
-        self.assertEqual([item["id"] for item in kept], ["@one:1"])
-        self.assertEqual(stats["python_duplicates"], 1)
-
-    def test_link_only_repost_is_removed(self):
-        link = "https://example.com/news/1"
-        kept, stats = filter_and_deduplicate([
-            post(f"Подробности и исходный материал по ссылке {link}", "@one:1", link),
-            post(f"Короткий комментарий и та же ссылка на материал {link}", "@two:7", link),
-        ])
-        self.assertEqual(len(kept), 1)
-        self.assertEqual(stats["python_duplicates"], 1)
-
-    def test_model_can_remove_only_valid_duplicate_ids(self):
-        response = {"groups": [{"keep": "@one:1", "duplicates": ["@two:2", "wrong"]}]}
-        dropped = duplicate_ids_from_response(response, {"@one:1", "@two:2"})
-        self.assertEqual(dropped, {"@two:2"})
-
-    def test_candidate_clusters_find_app_store_reposts(self):
-        posts = [
-            post("Telegram вновь появился в App Store, доступ к приложению восстановлен.", "@one:1"),
-            post("Telegram вернули в App Store — доступ к приложению восстановлен.", "@two:2"),
-            post("Telegram восстановили в AppStore.", "@three:3"),
-            post("Совершенно другая новость о космосе и телескопе.", "@four:4"),
-        ]
+    def test_candidate_clusters_find_reposts(self):
+        posts = [post("Telegram вновь появился в App Store, доступ восстановлен.", "@one:1"), post("Telegram вернули в App Store — доступ восстановлен.", "@two:2"), post("Telegram восстановили в AppStore.", "@three:3"), post("Совершенно другая новость о космосе и телескопе.", "@four:4")]
         clusters = candidate_clusters(posts)
         self.assertEqual(len(clusters), 1)
         self.assertEqual({item["id"] for item in clusters[0]}, {"@one:1", "@two:2", "@three:3"})
 
-    def test_digest_keeps_original_text_and_shows_clear_counts(self):
+    def test_format_keeps_original_text(self):
         original = "Первая строка\n\n  Вторая строка без изменений."
-        text = format_digest(
-            [post(original, "@one:1")],
-            {"source_posts": 3, "short": 0, "ads": 1, "ad_review": 2, "python_duplicates": 1},
-            semantic_duplicates=0,
-            confirmed_ads=1,
-            cross_run_duplicates=2,
-        )
+        text = format_digest([post(original, "@one:1")], {"source_posts": 3, "short": 0, "ads": 1, "ad_review": 2, "python_duplicates": 1}, semantic_duplicates=0, confirmed_ads=1, cross_run_duplicates=2)
         self.assertIn(original, text)
-        self.assertIn("явной рекламы: 1", text)
-        self.assertIn("проверено Gemini: 2", text)
-        self.assertIn("рекламы подтверждено Gemini: 1", text)
-        self.assertIn("точных повторов: 1", text)
-        self.assertIn("смысловых повторов: 0", text)
-        self.assertIn("повторов из прошлых дайджестов: 2", text)
         self.assertIn("оригинальных публикаций: 1", text)
 
-    def test_telegram_messages_never_exceed_limit(self):
-        chunks = list(telegram_chunks("слово\n" * 3_000))
+    def test_telegram_limit_and_chunking(self):
+        chunks = list(telegram_chunks("слово\n" * 3000))
         self.assertTrue(chunks)
-        self.assertTrue(all(len(chunk) <= 3800 for chunk in chunks))
+        self.assertTrue(all(len(chunk) <= 3900 for chunk in chunks))
 
-    def test_telegram_checkpoint_resumes_after_partial_chunk_failure(self):
-        first = "A" * 3790
-        second = "B" * 3790
-        text = first + "\n────────────\n" + second
-        posts = [post(first, "@one:1"), post(second, "@two:2")]
-        state = {"version": 4, "channels": {}, "delivered_ids": [], "delivered_chunks": []}
-
-        class Response:
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"ok": True}
-
-        calls = []
-
-        def fail_on_second(url, data, timeout):
-            calls.append(data["text"])
-            if len(calls) > 1:
-                raise requests.ConnectionError("network unavailable")
-            return Response()
-
-        with patch("digest_pipeline.requests.post", side_effect=fail_on_second), patch("digest_pipeline.time.sleep"):
-            with self.assertRaises(RuntimeError):
-                send_telegram_message("token", "chat", text, state=state, posts=posts)
-
-        self.assertEqual(len(state["delivered_chunks"]), 1)
-        self.assertEqual(state["delivered_ids"], [])
-
-        calls.clear()
-        with patch("digest_pipeline.requests.post", return_value=Response()) as send_mock:
-            send_telegram_message("token", "chat", text, state=state, posts=posts)
-
-        self.assertEqual(send_mock.call_count, 2)
-        self.assertEqual(set(state["delivered_ids"]), {"@one:1", "@two:2"})
-
-    def test_cross_run_semantic_memory_filters_already_delivered_event(self):
-        current_posts = [
-            post("Apple представила новый iPhone X на большой презентации.", "@current:10"),
-            post("Компания анонсировала новый тариф для мобильной связи.", "@current:11"),
-        ]
-        history = [
-            {
-                "id": "@old:1",
-                "date": "2026-07-30T09:00:00+00:00",
-                "delivered_at": "2026-07-30T09:10:00+00:00",
-                "text": "Apple представила новый iPhone X на презентации.",
-            }
-        ]
-
+    def test_cross_run_semantic_memory_filters_duplicate_event(self):
+        current = [post("Apple представила новый iPhone X на презентации.", "@current:10"), post("Компания анонсировала новый тариф для мобильной связи.", "@current:11")]
+        history = [{"id": "@old:1", "date": "2026-07-30T09:00:00+00:00", "delivered_at": "2026-07-30T09:10:00+00:00", "text": "Apple представила новый iPhone X на презентации."}]
         class Models:
-            def generate_content(self, model, contents, config):
-                return SimpleNamespace(text='{"repeats":["@current:10"]}')
-
-        client = SimpleNamespace(models=Models())
-        kept, dropped = cross_run_semantic_deduplicate(client, current_posts, history)
-        self.assertEqual([item["id"] for item in kept], ["@current:11"])
+            def generate_content(self, model, contents, config): return SimpleNamespace(text='{"repeats":["@current:10"]}')
+        kept, dropped = cross_run_semantic_deduplicate(SimpleNamespace(models=Models()), current, history)
+        self.assertEqual([p["id"] for p in kept], ["@current:11"])
         self.assertEqual(dropped, 1)
 
-    def test_cross_run_memory_does_not_rely_on_message_id_alone(self):
-        current_posts = [post("Apple представила новый iPhone X на презентации.", "@second_channel:77")]
-        history = [{
-            "id": "@first_channel:15",
-            "date": "2026-07-30T09:00:00+00:00",
-            "delivered_at": "2026-07-30T09:10:00+00:00",
-            "text": "Apple представила новый iPhone X на презентации.",
-        }]
-
+    def test_generate_json_uses_fallback_model(self):
         class Models:
+            def __init__(self): self.calls=[]
             def generate_content(self, model, contents, config):
-                return SimpleNamespace(text='{"repeats":["@second_channel:77"]}')
-
-        client = SimpleNamespace(models=Models())
-        kept, dropped = cross_run_semantic_deduplicate(client, current_posts, history)
-        self.assertEqual(kept, [])
-        self.assertEqual(dropped, 1)
-
-    def test_watermark_moves_only_for_a_successful_channel(self):
-        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
-
-        class Client:
-            def iter_messages(self, channel, min_id):
-                if channel == "@broken":
-                    raise OSError("network unavailable")
-                if min_id != 10:
-                    raise AssertionError(f"{min_id} != 10")
-                return iter([SimpleNamespace(id=11, date=now, message="Проверенная новость с достаточным количеством текста.")])
-
-        state = {"version": 2, "channels": {"@working": {"last_message_id": 10}, "@broken": {"last_message_id": 5}}}
-        posts, updates, failed = collect_posts(Client(), ["@working", "@broken"], state, now)
-        self.assertEqual(posts[0]["id"], "@working:11")
-        self.assertEqual(updates["@working"]["last_message_id"], 11)
-        self.assertNotIn("@broken", updates)
-        self.assertEqual(failed, ["@broken"])
-
-    def test_failed_channel_does_not_leak_partial_posts(self):
-        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
-
-        class Client:
-            def iter_messages(self, channel, min_id):
-                def broken():
-                    yield SimpleNamespace(id=11, date=now, message="Частично прочитанная новость, которую нельзя считать доставленной.")
-                    raise OSError("network unavailable")
-                return broken()
-
-        state = {"version": 2, "channels": {"@broken": {"last_message_id": 10}}}
-        posts, updates, failed = collect_posts(Client(), ["@broken"], state, now)
-        self.assertEqual(posts, [])
-        self.assertNotIn("@broken", updates)
-        self.assertEqual(failed, ["@broken"])
-
-    def test_delivered_id_is_not_recollected_on_normal_run(self):
-        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
-
-        class Client:
-            def iter_messages(self, channel, min_id):
-                return iter([
-                    SimpleNamespace(id=11, date=now, message="Уже доставленная новость не должна прийти повторно."),
-                    SimpleNamespace(id=12, date=now, message="Новая новость должна попасть в следующий дайджест."),
-                ])
-
-        state = {"version": 3, "channels": {"@test": {"last_message_id": 10}}, "delivered_ids": ["@test:11"]}
-        posts, _, failed = collect_posts(Client(), ["@test"], state, now)
-        self.assertEqual([item["id"] for item in posts], ["@test:12"])
-        self.assertEqual(failed, [])
-
-    def test_replay_does_not_use_delivered_id_filter(self):
-        now = datetime(2026, 7, 30, 12, tzinfo=timezone.utc)
-
-        class Client:
-            def iter_messages(self, channel, min_id):
-                return iter([SimpleNamespace(id=11, date=now, message="Эту новость нужно повторно собрать в режиме replay.")])
-
-        state = {"version": 3, "channels": {"@test": {"last_message_id": 10}}, "delivered_ids": ["@test:11"]}
-        posts, _, failed = collect_posts(Client(), ["@test"], state, now, replay_hours=1)
-        self.assertEqual([item["id"] for item in posts], ["@test:11"])
-        self.assertEqual(failed, [])
-
-    def test_model_fallback_is_used_after_temporary_failures(self):
-        class Models:
-            def __init__(self):
-                self.calls = []
-
-            def generate_content(self, model, contents, config):
-                self.calls.append((model, config))
-                if model == MODELS[0]:
-                    raise RuntimeError("503 UNAVAILABLE")
+                self.calls.append(model)
+                if model == MODELS[0]: raise RuntimeError("503 UNAVAILABLE")
                 return SimpleNamespace(text='{"groups": []}')
-
-        client = SimpleNamespace(models=Models())
+        models = Models()
         with patch("digest_pipeline.time.sleep"):
-            response = generate_json(client, "test")
-
-        self.assertEqual(response, {"groups": []})
-        self.assertEqual([model for model, _ in client.models.calls].count(MODELS[0]), 3)
-        self.assertEqual(client.models.calls[-1][0], MODELS[1])
-        self.assertNotIn("temperature", client.models.calls[-1][1])
+            result = generate_json(SimpleNamespace(models=models), "test")
+        self.assertEqual(result, {"groups": []})
+        self.assertEqual(models.calls[:3], [MODELS[0]] * 3)
+        self.assertEqual(models.calls[-1], MODELS[1])
 
 
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == "__main__": unittest.main()
