@@ -29,6 +29,8 @@ RECENT_NEWS_HOURS = 36
 MAX_RECENT_NEWS = 200
 MAX_RECENT_NEWS_CHARS = 500
 RECENT_NEWS_HISTORY_BATCH = 40
+MAX_POST_CHARS = 3800
+WATCHDOG_MAX_GAP_HOURS = 8
 
 AD_MARKERS = (
     "#реклама", "erid", "промокод", "рекламная интеграция",
@@ -450,7 +452,7 @@ def format_digest(posts, stats, semantic_duplicates, confirmed_ads=0, ai_unavail
             "",
             "────────────",
             f"🕒 {format_post_time(post['date'])} · {post['channel']}",
-            post["text"],
+            truncate_post(post["text"]),
             f"Источник: {post['url']}",
         ])
     return "\n".join(lines).strip()
@@ -468,6 +470,13 @@ def telegram_chunks(text, limit=3800):
             boundary = limit
         yield text[:boundary].rstrip()
         text = text[boundary:].lstrip()
+
+
+def truncate_post(text, limit=MAX_POST_CHARS):
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return text[:limit - 3] + "..."
 
 
 def chunk_checkpoint_id(chunk):
@@ -514,6 +523,21 @@ def replay_hours_from_environment():
     if not 0 <= hours <= 72:
         raise RuntimeError("REPLAY_HOURS must be between 0 and 72")
     return hours
+
+
+def watchdog_check(state, now):
+    """Check if previous run was missed and log warning."""
+    last_run = state.get("last_successful_run")
+    if not last_run:
+        return False
+    last_run_dt = parse_datetime(last_run, None)
+    if last_run_dt is None:
+        return False
+    gap_hours = (now - last_run_dt).total_seconds() / 3600
+    if gap_hours > WATCHDOG_MAX_GAP_HOURS:
+        print(f"WATCHDOG: Last successful run was {gap_hours:.1f}h ago (threshold: {WATCHDOG_MAX_GAP_HOURS}h)")
+        return True
+    return False
 
 
 class DigestPipeline:
@@ -682,6 +706,7 @@ class DigestPipeline:
         require_environment()
         now = utc_now()
         state = self.load_state()
+        watchdog_missed = watchdog_check(state, now)
         channels = load_channels()
         replay_hours = replay_hours_from_environment()
         if not channels:
@@ -731,6 +756,10 @@ class DigestPipeline:
         )
         if not posts and not ai_unavailable:
             digest_text = "❗❗❗❗❗❗\n🗞 За этот период новых подходящих новостей не было."
+        if ai_unavailable:
+            digest_text += "\n\n⚠️ Gemini недоступен: дедупликация отключена, возможны повторы."
+        if watchdog_missed:
+            digest_text += "\n\n⚠️ Внимание: предыдущий дайджест был пропущен (watchdog)."
         if failed_channels:
             digest_text += "\n\n⚠️ Не удалось проверить: " + ", ".join(failed_channels)
 
