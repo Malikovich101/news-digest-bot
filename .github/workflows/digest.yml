@@ -1,8 +1,6 @@
 name: News Digest
 
 on:
-  push:
-    branches: [main]
   schedule:
     # Не начало часа: GitHub чаще задерживает планировщик на пиковых отметках.
     - cron: '5 3 * * *'   # 08:05 Пермь (UTC+5)
