@@ -2,10 +2,9 @@ name: News Digest
 
 on:
   schedule:
-    # Не начало часа: GitHub чаще задерживает планировщик на пиковых отметках.
-    - cron: '5 3 * * *'   # 08:05 Пермь (UTC+5)
-    - cron: '5 9 * * *'   # 14:05 Пермь (UTC+5)
-    - cron: '5 15 * * *'  # 20:05 Пермь (UTC+5)
+    - cron: '5 3 * * *'
+    - cron: '5 9 * * *'
+    - cron: '5 15 * * *'
   workflow_dispatch:
     inputs:
       replay_hours:
@@ -27,23 +26,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
+          ref: refactor/reliable-digest-pipeline
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify repository state
         run: |
           echo "Checked out commit: $(git rev-parse HEAD)"
-          echo "Origin main: $(git rev-parse origin/main)"
 
-      - name: Restore runtime state from cache
+      - name: Restore runtime state
         id: restore-state
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: news-digest-state-${{ github.run_id }}
+          key: news-digest-state-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
-            news-digest-state-
+            news-digest-state-${{ github.ref_name }}-
+            news-digest-state-main-
 
       - name: Migrate existing tracked state on first cache miss
         if: steps.restore-state.outputs.cache-hit != 'true'
@@ -63,10 +62,9 @@ jobs:
           done < <(git log --all --format=%H -- state.json)
 
           if [ -n "$last_state_commit" ]; then
-            echo "Migrating state.json from historical commit $last_state_commit"
             git show "${last_state_commit}:state.json" > state.json
           else
-            echo "No historical state found; starting with empty runtime state."
+            echo "{}" > state.json
           fi
 
       - uses: actions/setup-python@v6
@@ -94,28 +92,9 @@ jobs:
           REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
         run: python run_digest.py
 
-      - name: Clear completed delivery checkpoints
-        if: success()
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          path = Path("state.json")
-          if path.exists():
-              state = json.loads(path.read_text(encoding="utf-8"))
-              state["delivered_chunks"] = []
-              path.write_text(
-                  json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                  encoding="utf-8",
-              )
-          PY
-
-      - name: Save runtime state to cache
+      - name: Save runtime state
         if: always() && hashFiles('state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: news-digest-state-${{ github.run_id }}
-          restore-keys: |
-            news-digest-state-
+          key: news-digest-state-${{ github.ref_name }}-${{ github.run_id }}
