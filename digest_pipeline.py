@@ -727,6 +727,11 @@ class DigestPipeline:
         if failed_channels and len(failed_channels) == len(channels):
             raise RuntimeError("All configured channels failed to load")
 
+        # Save intermediate state: update channel watermarks even if Gemini fails later
+        state["channels"].update(channel_updates)
+        self.save_state(state)
+        print(f"Intermediate state saved: {len(channel_updates)} channels updated, {len(collected)} posts collected")
+
         collected.sort(key=lambda post: post["date"])
         posts, stats = filter_and_deduplicate(collected)
         ai_unavailable = False
@@ -781,10 +786,11 @@ class DigestPipeline:
             self.save_state(state)
 
         print(
-            f"Delivered {len(posts)} original posts from {len(collected)} collected "
-            f"(semantic_duplicates={semantic_duplicates}, "
-            f"cross_run_duplicates={cross_run_duplicates}, "
-            f"confirmed_ads={confirmed_ads}, replay_hours={replay_hours})"
+            print(f"Delivered {len(posts)} original posts from {len(collected)} collected "
+                f"(semantic_duplicates={semantic_duplicates}, "
+                f"cross_run_duplicates={cross_run_duplicates}, "
+                f"confirmed_ads={confirmed_ads}, replay_hours={replay_hours}, "
+                f"channels_updated={len(channel_updates)})")
         )
 
     def filter_and_deduplicate(self, posts):

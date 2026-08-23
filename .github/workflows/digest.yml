@@ -117,3 +117,5 @@ jobs:
         with:
           path: state.json
           key: news-digest-state-${{ github.run_id }}
+          restore-keys: |
+            news-digest-state-
