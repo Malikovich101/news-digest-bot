@@ -160,5 +160,48 @@ class GeminiFallbackTests(unittest.TestCase):
         self.assertEqual(len(posts), 2)
 
 
+class TruncatePostTests(unittest.TestCase):
+    """Tests for post truncation."""
+
+    def test_short_post_not_truncated(self):
+        """Short posts should not be modified."""
+        text = "Short post"
+        self.assertEqual(digest_pipeline.truncate_post(text), text)
+
+    def test_long_post_truncated(self):
+        """Posts longer than MAX_POST_CHARS should be truncated with '...'."""
+        text = "A" * 5000
+        result = digest_pipeline.truncate_post(text)
+        self.assertTrue(len(result) <= digest_pipeline.MAX_POST_CHARS)
+        self.assertTrue(result.endswith("..."))
+
+    def test_post_at_limit_not_truncated(self):
+        """Posts exactly at limit should not be truncated."""
+        text = "A" * digest_pipeline.MAX_POST_CHARS
+        self.assertEqual(digest_pipeline.truncate_post(text), text)
+
+
+class WatchdogTests(unittest.TestCase):
+    """Tests for watchdog functionality."""
+
+    def test_no_last_run_no_warning(self):
+        """No warning if there's no last_successful_run."""
+        state = {}
+        now = digest_pipeline.utc_now()
+        self.assertFalse(digest_pipeline.watchdog_check(state, now))
+
+    def test_recent_run_no_warning(self):
+        """No warning if last run was recent."""
+        state = {"last_successful_run": (digest_pipeline.utc_now() - timedelta(hours=2)).isoformat()}
+        now = digest_pipeline.utc_now()
+        self.assertFalse(digest_pipeline.watchdog_check(state, now))
+
+    def test_old_run_triggers_warning(self):
+        """Warning if last run was too long ago."""
+        state = {"last_successful_run": (digest_pipeline.utc_now() - timedelta(hours=12)).isoformat()}
+        now = digest_pipeline.utc_now()
+        self.assertTrue(digest_pipeline.watchdog_check(state, now))
+
+
 if __name__ == "__main__":
     unittest.main()
