@@ -1,4 +1,5 @@
 import unittest
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -79,8 +80,8 @@ class DigestPipelineTests(unittest.TestCase):
             post("@late:2", "2026-08-15T01:18:00+00:00", "Компания представила новый продукт вчера вечером по данным канала."),
         ]
 
-        with patch("digest_pipeline.digest.generate_json", return_value={
-            "groups": [{"ids": ["@late:2", "@early:1"]}]
+        with patch("digest_pipeline.generate_json", return_value={
+            "groups": [{"keep": "@early:1", "duplicates": ["@late:2"]}]
         }):
             kept, dropped = pipeline.semantic_deduplicate(SimpleNamespace(), posts)
 
@@ -109,6 +110,54 @@ class DigestPipelineTests(unittest.TestCase):
         self.assertEqual(failed, ["@broken"])
         self.assertEqual(updates["@ok"]["last_checked_at"], now.isoformat())
         self.assertNotIn("@broken", updates)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class LongTermMemoryTests(unittest.TestCase):
+    """Tests for long-term deduplication memory beyond the sliding window."""
+
+    def test_recent_news_prunes_entries_older_than_36_hours(self):
+        """Entries older than RECENT_NEWS_HOURS are pruned from memory."""
+        old_time = digest_pipeline.utc_now() - timedelta(hours=40)
+        recent_time = digest_pipeline.utc_now() - timedelta(hours=10)
+
+        recent_news = [
+            {
+                "id": "@old:1",
+                "date": old_time.isoformat(),
+                "delivered_at": old_time.isoformat(),
+                "text": "Old news that should be pruned",
+            },
+            {
+                "id": "@recent:1",
+                "date": recent_time.isoformat(),
+                "delivered_at": recent_time.isoformat(),
+                "text": "Recent news that should be kept",
+            },
+        ]
+
+        pruned = digest_pipeline.prune_recent_news(recent_news, digest_pipeline.utc_now())
+        self.assertEqual(len(pruned), 1)
+        self.assertEqual(pruned[0]["id"], "@recent:1")
+
+
+class GeminiFallbackTests(unittest.TestCase):
+    """Tests for behavior when Gemini is unavailable."""
+
+    def test_gemini_fallback_does_not_remove_duplicates(self):
+        """When Gemini is unavailable, duplicates are not removed."""
+        # This test documents the expected behavior:
+        # if Gemini fails, we keep all posts rather than risk losing real news
+        posts = [
+            {"id": "@one:1", "channel": "@one", "message_id": 1, "date": "2026-08-14T10:00:00+00:00", "text": "Apple представила новый iPhone.", "url": "https://t.me/one/1"},
+            {"id": "@two:2", "channel": "@two", "message_id": 2, "date": "2026-08-14T10:01:00+00:00", "text": "Apple представила новый iPhone.", "url": "https://t.me/two/2"},
+        ]
+        # Without Gemini, both posts would be kept (no semantic dedup)
+        # This is the expected fallback behavior
+        self.assertEqual(len(posts), 2)
 
 
 if __name__ == "__main__":

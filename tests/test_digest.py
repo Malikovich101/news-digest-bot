@@ -139,11 +139,11 @@ class DigestUtilityTests(unittest.TestCase):
 
         def fail_on_second(url, data, timeout):
             calls.append(data["text"])
-            if len(calls) in (2, 3):
+            if len(calls) > 1:
                 raise requests.ConnectionError("network unavailable")
             return Response()
 
-        with patch("digest.requests.post", side_effect=fail_on_second), patch("digest.time.sleep"):
+        with patch("digest_pipeline.requests.post", side_effect=fail_on_second), patch("digest_pipeline.time.sleep"):
             with self.assertRaises(RuntimeError):
                 send_telegram_message("token", "chat", text, state=state, posts=posts)
 
@@ -151,7 +151,7 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertEqual(state["delivered_ids"], [])
 
         calls.clear()
-        with patch("digest.requests.post", return_value=Response()) as send_mock:
+        with patch("digest_pipeline.requests.post", return_value=Response()) as send_mock:
             send_telegram_message("token", "chat", text, state=state, posts=posts)
 
         self.assertEqual(send_mock.call_count, 2)
@@ -210,10 +210,10 @@ class DigestUtilityTests(unittest.TestCase):
                 return iter([SimpleNamespace(id=11, date=now, message="Проверенная новость с достаточным количеством текста.")])
 
         state = {"version": 2, "channels": {"@working": {"last_message_id": 10}, "@broken": {"last_message_id": 5}}}
-        posts, next_state, failed = collect_posts(Client(), ["@working", "@broken"], state, now)
+        posts, updates, failed = collect_posts(Client(), ["@working", "@broken"], state, now)
         self.assertEqual(posts[0]["id"], "@working:11")
-        self.assertEqual(next_state["channels"]["@working"]["last_message_id"], 11)
-        self.assertEqual(next_state["channels"]["@broken"]["last_message_id"], 5)
+        self.assertEqual(updates["@working"]["last_message_id"], 11)
+        self.assertNotIn("@broken", updates)
         self.assertEqual(failed, ["@broken"])
 
     def test_failed_channel_does_not_leak_partial_posts(self):
@@ -227,9 +227,9 @@ class DigestUtilityTests(unittest.TestCase):
                 return broken()
 
         state = {"version": 2, "channels": {"@broken": {"last_message_id": 10}}}
-        posts, next_state, failed = collect_posts(Client(), ["@broken"], state, now)
+        posts, updates, failed = collect_posts(Client(), ["@broken"], state, now)
         self.assertEqual(posts, [])
-        self.assertEqual(next_state["channels"]["@broken"]["last_message_id"], 10)
+        self.assertNotIn("@broken", updates)
         self.assertEqual(failed, ["@broken"])
 
     def test_delivered_id_is_not_recollected_on_normal_run(self):
@@ -271,11 +271,11 @@ class DigestUtilityTests(unittest.TestCase):
                 return SimpleNamespace(text='{"groups": []}')
 
         client = SimpleNamespace(models=Models())
-        with patch("digest.time.sleep"):
+        with patch("digest_pipeline.time.sleep"):
             response = generate_json(client, "test")
 
         self.assertEqual(response, {"groups": []})
-        self.assertEqual([model for model, _ in client.models.calls].count(MODELS[0]), 2)
+        self.assertEqual([model for model, _ in client.models.calls].count(MODELS[0]), 3)
         self.assertEqual(client.models.calls[-1][0], MODELS[1])
         self.assertNotIn("temperature", client.models.calls[-1][1])
 
