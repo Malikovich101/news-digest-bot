@@ -34,3 +34,11 @@ jobs:
           git diff --staged --quiet || git commit -m "Update channels [skip ci]"
           git push
 
+      - name: Trigger News Digest heartbeat
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=digest-heartbeat
