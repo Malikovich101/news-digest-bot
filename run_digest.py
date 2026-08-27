@@ -1,17 +1,16 @@
 """Production entrypoint with an additional quality-control layer.
 
-The reliability/runtime code remains unchanged.  This module patches the
+The reliability/runtime code remains unchanged. This module patches the
 pipeline functions before importing reliable_runtime so content quality is
 hardened without touching delivery/state machinery.
 """
 
-import re
-
 import digest_pipeline as dp
 
 
-# These are high-confidence commercial markers.  They are deliberately
-# deterministic: if a post contains one of them, it must not reach the digest.
+# High-confidence markers that should never reach the digest. Everything else
+# is reviewed by Gemini; this avoids false positives from ordinary news that
+# happens to mention prices, purchases or discounts.
 STRONG_AD_MARKERS = (
     "#реклама",
     "#рекламa",
@@ -29,29 +28,14 @@ STRONG_AD_MARKERS = (
     "промо-код",
 )
 
-STRONG_AD_PATTERNS = (
-    r"\bреклама\b",
-    r"\bкупить\b",
-    r"\bзаказать\b",
-    r"\bзакажи\b",
-    r"\bскидка\b",
-    r"\bскидки\b",
-    r"\bцена\s+от\b",
-    r"\bуспей(?:те)?\b",
-    r"\bтолько\s+сегодня\b",
-    r"\bпо\s+промокоду\b",
-)
-
 
 def _obvious_ad(text):
     normalized = dp.analysis_text(text).lower()
-    if any(marker in normalized for marker in STRONG_AD_MARKERS):
-        return True
-    return any(re.search(pattern, normalized) for pattern in STRONG_AD_PATTERNS)
+    return any(marker in normalized for marker in STRONG_AD_MARKERS)
 
 
 def review_all_ads(client, posts):
-    """Review every non-obvious candidate, not only posts with promo keywords."""
+    """Review every non-obvious candidate, not only promo-looking posts."""
     if not posts:
         return posts, 0
 
@@ -59,14 +43,12 @@ def review_all_ads(client, posts):
     review = [post for post in posts if post["id"] not in obvious]
     dropped = set(obvious)
 
-    # Previously Gemini saw only posts containing a small set of promo words.
-    # That allowed advertorial/native ads without those exact words through.
+    # The old implementation sent only posts containing a small set of promo
+    # words to Gemini. Native/advertorial posts without those words escaped.
     for batch in dp.make_ai_batches(review, dp.MAX_MODEL_POST_CHARS):
         response = dp.generate_json(client, dp.ad_review_prompt(batch))
         dropped.update(
-            dp.ad_ids_from_response(
-                response, {post["id"] for post in batch}
-            )
+            dp.ad_ids_from_response(response, {post["id"] for post in batch})
         )
 
     kept = [post for post in posts if post["id"] not in dropped]
@@ -80,28 +62,30 @@ def enhanced_semantic_deduplicate(client, posts):
 
     dropped = set()
 
-    # First pass: compare the whole stream, not only deterministic token
-    # clusters.  Overlap prevents duplicates close to an AI-batch boundary.
+    # Compare the whole stream, not only deterministic token clusters.
+    # Overlap prevents duplicates near an AI-batch boundary from escaping.
     for batch in dp.make_ai_batches(posts, dp.MAX_PREVIEW_CHARS, overlap=30):
         active = [post for post in batch if post["id"] not in dropped]
         if len(active) < 2:
             continue
-        response = dp.generate_json(client, dp.duplicate_prompt(active, dp.MAX_PREVIEW_CHARS))
+        response = dp.generate_json(
+            client, dp.duplicate_prompt(active, dp.MAX_PREVIEW_CHARS)
+        )
         dropped.update(
             dp.duplicate_ids_from_response(
                 response, {post["id"] for post in active}
             )
         )
 
-    # Second pass: use the full source text for posts that look related by
-    # deterministic lexical signals. This catches paraphrases missed by the
-    # preview pass while retaining Gemini's conservative event-level rules.
+    # Re-check lexical clusters with the full post text.
     remaining = [post for post in posts if post["id"] not in dropped]
     for cluster in dp.candidate_clusters(remaining):
         active = [post for post in cluster if post["id"] not in dropped]
         if len(active) < 2:
             continue
-        response = dp.generate_json(client, dp.duplicate_prompt(active, dp.MAX_MODEL_POST_CHARS))
+        response = dp.generate_json(
+            client, dp.duplicate_prompt(active, dp.MAX_MODEL_POST_CHARS)
+        )
         dropped.update(
             dp.duplicate_ids_from_response(
                 response, {post["id"] for post in active}
