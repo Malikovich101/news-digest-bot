@@ -14,6 +14,7 @@ import digest_pipeline as dp
 STRONG_AD_MARKERS = (
     "#реклама",
     "#рекламa",
+    "реклама:",
     "erid:",
     "erid ",
     "рекламная интеграция",
