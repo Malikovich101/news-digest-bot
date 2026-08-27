@@ -69,7 +69,7 @@ class ReliablePipelineTests(unittest.TestCase):
         calls = []
         def send(url, data, timeout):
             calls.append(data["text"])
-            if data["text"] == "second": raise requests.ConnectionError("network unavailable")
+            if len(calls) == 2: raise requests.ConnectionError("network unavailable")
             return Response()
         with patch("digest_pipeline.requests.post", side_effect=send), patch("digest_pipeline.time.sleep"), patch.object(pipeline, "save_state"):
             with self.assertRaises(RuntimeError): pipeline.send_telegram("token", "chat", "ignored", state, posts, rendered_chunks=chunks)
@@ -85,26 +85,26 @@ class ReliablePipelineTests(unittest.TestCase):
 
     def test_latest_due_window_is_logical_not_exact_cron(self):
         now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
-        self.assertEqual(latest_due_window(now).isoformat(), "2026-08-27T08:05:00+05:00")
+        self.assertEqual(latest_due_window(now).isoformat(), "2026-08-27T14:05:00+05:00")
 
     def test_scheduled_window_is_not_repeated(self):
         now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
-        state = {"channels": {"__digest__": {"last_successful_window": "2026-08-27T08:05:00+05:00"}}}
+        state = {"channels": {"__digest__": {"last_successful_window": "2026-08-27T14:05:00+05:00"}}}
         due, window = scheduled_window_due(state, now)
         self.assertFalse(due)
-        self.assertEqual(window.isoformat(), "2026-08-27T08:05:00+05:00")
+        self.assertEqual(window.isoformat(), "2026-08-27T14:05:00+05:00")
 
     def test_missed_window_is_caught_up(self):
         now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
-        state = {"channels": {"__digest__": {"last_successful_window": "2026-08-26T20:05:00+05:00"}}}
+        state = {"channels": {"__digest__": {"last_successful_window": "2026-08-27T08:05:00+05:00"}}}
         due, window = scheduled_window_due(state, now)
         self.assertTrue(due)
-        self.assertEqual(window.isoformat(), "2026-08-27T08:05:00+05:00")
+        self.assertEqual(window.isoformat(), "2026-08-27T14:05:00+05:00")
 
     def test_schedule_warning_appears_after_90_minutes(self):
         state = {"channels": {"__digest__": {"last_successful_window": "2026-08-26T20:05:00+05:00"}}}
-        before = datetime(2026, 8, 27, 9, 34, tzinfo=timezone.utc)
-        after = datetime(2026, 8, 27, 9, 36, tzinfo=timezone.utc)
+        before = datetime(2026, 8, 27, 4, 34, tzinfo=timezone.utc)
+        after = datetime(2026, 8, 27, 4, 36, tzinfo=timezone.utc)
         self.assertIsNone(schedule_health_warning(state, before))
         self.assertIn("91 мин.", schedule_health_warning(state, after))
 
