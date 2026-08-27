@@ -2,14 +2,11 @@ name: News Digest
 
 on:
   schedule:
-    # Primary digest releases: 08:05, 14:05 and 20:05 Europe/Perm.
-    # GitHub cron uses UTC.
-    - cron: '5 3,9,15 * * *'
-    # Secondary in-workflow safety net. A separate Manage Channels heartbeat
-    # also dispatches this workflow every 5 minutes.
-    - cron: '2,17,32,47 * * * *'
-  repository_dispatch:
-    types: [digest-heartbeat]
+    # 08:05, 14:05 and 20:05 Europe/Perm (UTC+5).
+    # Not at the top of the hour to reduce scheduler contention.
+    - cron: '5 3 * * *'
+    - cron: '5 9 * * *'
+    - cron: '5 15 * * *'
   workflow_dispatch:
     inputs:
       replay_hours:
@@ -17,7 +14,6 @@ on:
         required: false
         default: '0'
         type: string
-  pull_request:
 
 concurrency:
   group: news-digest-runtime-state
@@ -32,22 +28,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify repository state
         run: |
           echo "Checked out commit: $(git rev-parse HEAD)"
-          echo "Trigger: ${{ github.event_name }}"
+          echo "Origin main: $(git rev-parse origin/main)"
 
-      - name: Restore runtime state
+      - name: Restore runtime state from cache
         id: restore-state
         uses: actions/cache/restore@v5
         with:
           path: state.json
-          key: news-digest-state-main-${{ github.run_id }}
+          key: news-digest-state-${{ github.run_id }}
           restore-keys: |
-            news-digest-state-main-
             news-digest-state-
 
       - name: Migrate existing tracked state on first cache miss
@@ -68,85 +64,20 @@ jobs:
           done < <(git log --all --format=%H -- state.json)
 
           if [ -n "$last_state_commit" ]; then
+            echo "Migrating state.json from historical commit $last_state_commit"
             git show "${last_state_commit}:state.json" > state.json
           else
-            echo "{}" > state.json
+            echo "No historical state found; starting with empty runtime state."
           fi
 
-      - name: Check whether a digest window is due
-        id: due_check
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from datetime import datetime, time, timezone
-          from zoneinfo import ZoneInfo
-
-          event = os.environ.get("EVENT_NAME", "")
-          replay_hours = int(os.environ.get("REPLAY_HOURS", "0") or "0")
-          if event in {"workflow_dispatch", "pull_request"} or replay_hours != 0:
-              print("run=true (manual/PR/replay execution)")
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-                  out.write("run=true\n")
-              raise SystemExit
-
-          # Both schedule and repository_dispatch are safety-triggered events.
-          tz = ZoneInfo("Europe/Perm")
-          now = datetime.now(timezone.utc).astimezone(tz)
-          windows = [(8, 5), (14, 5), (20, 5)]
-          due = None
-          for hour, minute in windows:
-              candidate = datetime.combine(now.date(), time(hour, minute), tzinfo=tz)
-              if candidate <= now:
-                  due = candidate
-
-          if due is None:
-              print(f"run=false; before first digest window; now={now.isoformat()}")
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-                  out.write("run=false\n")
-              raise SystemExit
-
-          try:
-              with open("state.json", encoding="utf-8") as fh:
-                  state = json.load(fh)
-          except (FileNotFoundError, json.JSONDecodeError):
-              state = {}
-
-          last_raw = (
-              state.get("channels", {})
-              .get("__digest__", {})
-              .get("last_successful_window")
-          )
-          last = None
-          if last_raw:
-              try:
-                  last = datetime.fromisoformat(last_raw.replace("Z", "+00:00")).astimezone(tz)
-              except ValueError:
-                  last = None
-
-          should_run = last is None or due > last
-          print(
-              f"run={str(should_run).lower()}; now={now.isoformat()}; "
-              f"due_window={due.isoformat()}; last_successful_window={last.isoformat() if last else 'none'}"
-          )
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"run={str(should_run).lower()}\n")
-          PY
-
       - uses: actions/setup-python@v6
-        if: steps.due_check.outputs.run == 'true'
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        if: steps.due_check.outputs.run == 'true'
         run: pip install -r requirements.txt
 
       - name: Run unit tests in isolated workspace
-        if: steps.due_check.outputs.run == 'true'
         run: |
           TEST_DIR="$(mktemp -d)"
           tar --exclude=.git --exclude=state.json --exclude='state.json.tmp' -cf - . | tar -xf - -C "$TEST_DIR"
@@ -154,7 +85,6 @@ jobs:
           python -m unittest discover -s tests -v
 
       - name: Run digest script
-        if: steps.due_check.outputs.run == 'true' && github.event_name != 'pull_request'
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
@@ -163,12 +93,28 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python run_digest.py
 
-      - name: Save runtime state
-        if: always() && steps.due_check.outputs.run == 'true' && github.event_name != 'pull_request' && hashFiles('state.json') != ''
+      - name: Clear completed delivery checkpoints
+        if: success()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("state.json")
+          if path.exists():
+              state = json.loads(path.read_text(encoding="utf-8"))
+              state["delivered_chunks"] = []
+              path.write_text(
+                  json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+          PY
+
+      - name: Save runtime state to cache
+        if: always() && hashFiles('state.json') != ''
         uses: actions/cache/save@v5
         with:
           path: state.json
-          key: news-digest-state-main-${{ github.run_id }}
+          key: news-digest-state-${{ github.run_id }}
