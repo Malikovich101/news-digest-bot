@@ -42,7 +42,7 @@ jobs:
 
       - name: Restore runtime state
         id: restore-state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: state.json
           key: news-digest-state-main-${{ github.run_id }}
@@ -168,7 +168,7 @@ jobs:
 
       - name: Save runtime state
         if: always() && steps.due_check.outputs.run == 'true' && github.event_name != 'pull_request' && hashFiles('state.json') != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: state.json
           key: news-digest-state-main-${{ github.run_id }}
