@@ -1,6 +1,7 @@
 import os
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 import requests
 from google import genai
@@ -11,6 +12,7 @@ from digest_pipeline import (
     CHUNK_DELAY_SECONDS,
     MAX_DELIVERED_CHUNKS,
     MAX_DELIVERED_IDS,
+    PERM_TIMEZONE,
     RETRY_ATTEMPTS,
     DigestPipeline,
     chunk_checkpoint_id,
@@ -18,14 +20,18 @@ from digest_pipeline import (
     filter_and_deduplicate,
     format_post_time,
     load_channels,
+    parse_datetime,
     replay_hours_from_environment,
     require_environment,
     review_suspicious_ads,
     semantic_deduplicate,
     telegram_chunks,
     utc_now,
-    watchdog_check,
 )
+
+DIGEST_WINDOWS = ((8, 5, "morning"), (14, 5, "afternoon"), (20, 5, "evening"))
+DIGEST_STATE_KEY = "__digest__"
+SCHEDULE_WARNING_MINUTES = 90
 
 
 def _build_header(stats, semantic_duplicates, confirmed_ads, cross_run_duplicates, ai_unavailable):
@@ -73,7 +79,7 @@ def build_delivery_chunks(posts, stats, semantic_duplicates, confirmed_ads, cros
 
 
 def send_reliable_chunks(token, chat_id, state, records, pipeline):
-    """Deliver chunks idempotently; keep a post pending until every chunk of it is sent."""
+    """Deliver chunks idempotently; keep a post pending until every owned Telegram chunk is sent."""
     receipts = state.setdefault("delivery_receipts", {})
     completed = set(state.get("delivered_chunks", [])) | set(receipts)
     post_checkpoints = defaultdict(set)
@@ -123,17 +129,91 @@ def send_reliable_chunks(token, chat_id, state, records, pipeline):
     pipeline.save_state(state)
 
 
+def _window_at(local_date, hour, minute):
+    return datetime.combine(local_date, datetime.min.time(), tzinfo=PERM_TIMEZONE).replace(hour=hour, minute=minute)
+
+
+def latest_due_window(now):
+    """Return the latest logical digest window that has started today, or None before 08:05."""
+    local_now = now.astimezone(PERM_TIMEZONE)
+    latest = None
+    for hour, minute, _name in DIGEST_WINDOWS:
+        candidate = _window_at(local_now.date(), hour, minute)
+        if candidate <= local_now:
+            latest = candidate
+    return latest
+
+
+def next_window_after(window):
+    """Return the first logical digest window after the supplied window."""
+    local_window = window.astimezone(PERM_TIMEZONE)
+    for hour, minute, _name in DIGEST_WINDOWS:
+        candidate = _window_at(local_window.date(), hour, minute)
+        if candidate > local_window:
+            return candidate
+    next_date = local_window.date() + timedelta(days=1)
+    hour, minute, _name = DIGEST_WINDOWS[0]
+    return _window_at(next_date, hour, minute)
+
+
+def _last_successful_window(state):
+    digest_state = state.get("channels", {}).get(DIGEST_STATE_KEY, {})
+    if not isinstance(digest_state, dict):
+        return None
+    return parse_datetime(digest_state.get("last_successful_window"), None)
+
+
+def _set_last_successful_window(state, window):
+    channels = state.setdefault("channels", {})
+    digest_state = channels.setdefault(DIGEST_STATE_KEY, {})
+    digest_state["last_successful_window"] = window.isoformat()
+
+
+def scheduled_window_due(state, now):
+    """Return whether a new logical digest window is due and the latest eligible window."""
+    due_window = latest_due_window(now)
+    if due_window is None:
+        return False, None
+    last_window = _last_successful_window(state)
+    return last_window is None or due_window > last_window, due_window
+
+
+def schedule_health_warning(state, now):
+    """Warn only when the first missed logical window is more than 90 minutes late."""
+    due_window = latest_due_window(now)
+    last_window = _last_successful_window(state)
+    if due_window is None or last_window is None or due_window <= last_window:
+        return None
+    first_missed = next_window_after(last_window)
+    if first_missed > due_window:
+        return None
+    delay_minutes = int((now - first_missed.astimezone(now.tzinfo)).total_seconds() // 60)
+    if delay_minutes <= SCHEDULE_WARNING_MINUTES:
+        return None
+    return (
+        f"⚠️ Внимание: предыдущий дайджест был задержан на {delay_minutes} мин. "
+        f"Автоматически выполнено восстановление пропущенного окна."
+    )
+
+
 def run_reliable_digest():
-    """Run the production pipeline with at-least-once processing and idempotent delivery."""
+    """Run the production pipeline with logical-window catch-up and idempotent delivery."""
     require_environment()
     now = utc_now()
     pipeline = DigestPipeline()
     state = pipeline.load_state()
-    watchdog_missed = watchdog_check(state, now)
     channels = load_channels()
     replay_hours = replay_hours_from_environment()
     if not channels:
         raise RuntimeError("channels.txt is empty")
+
+    scheduled_run = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    due, due_window = scheduled_window_due(state, now)
+    if scheduled_run and replay_hours == 0 and not due:
+        print("No digest window is due; scheduled check exits without collecting or sending news.")
+        return
+
+    schedule_warning = schedule_health_warning(state, now) if replay_hours == 0 else None
 
     pending = [item for item in state.get("pending_posts", {}).values() if isinstance(item, dict)]
     if replay_hours == 0 and pending:
@@ -189,8 +269,8 @@ def run_reliable_digest():
     warnings = []
     if ai_unavailable:
         warnings.append("⚠️ Gemini недоступен: возможны дубли.")
-    if watchdog_missed:
-        warnings.append("⚠️ Внимание: предыдущий дайджест был пропущен.")
+    if schedule_warning:
+        warnings.append(schedule_warning)
     if failed_channels:
         warnings.append("⚠️ Не удалось проверить: " + ", ".join(failed_channels))
 
@@ -216,12 +296,15 @@ def run_reliable_digest():
         from digest_pipeline import remember_delivered_news
         remember_delivered_news(state, posts, delivered_at)
         state["last_successful_run"] = delivered_at.isoformat()
+        if due_window is not None:
+            _set_last_successful_window(state, due_window)
     pipeline.save_state(state)
 
     print(
         f"Delivered {len(posts)} canonical news posts from {len(collected)} collected "
         f"(semantic_duplicates={semantic_duplicates}, cross_run_duplicates={cross_run_duplicates}, "
-        f"confirmed_ads={confirmed_ads}, replay_hours={replay_hours}, channels_updated={len(channel_updates)})"
+        f"confirmed_ads={confirmed_ads}, replay_hours={replay_hours}, "
+        f"channels_updated={len(channel_updates)}, due_window={due_window.isoformat() if due_window else 'manual'})"
     )
 
 

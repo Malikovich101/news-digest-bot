@@ -8,6 +8,7 @@ from unittest.mock import patch
 import requests
 
 from digest_pipeline import DigestPipeline, migrate_state, prune_recent_news, telegram_chunks
+from reliable_runtime import latest_due_window, schedule_health_warning, scheduled_window_due
 
 
 def post(source_id, text):
@@ -81,6 +82,31 @@ class ReliablePipelineTests(unittest.TestCase):
         chunks = list(telegram_chunks(original))
         self.assertTrue(all(len(chunk) <= 3900 for chunk in chunks))
         self.assertEqual("".join(chunks), original)
+
+    def test_latest_due_window_is_logical_not_exact_cron(self):
+        now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        self.assertEqual(latest_due_window(now).isoformat(), "2026-08-27T08:05:00+05:00")
+
+    def test_scheduled_window_is_not_repeated(self):
+        now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        state = {"channels": {"__digest__": {"last_successful_window": "2026-08-27T08:05:00+05:00"}}}
+        due, window = scheduled_window_due(state, now)
+        self.assertFalse(due)
+        self.assertEqual(window.isoformat(), "2026-08-27T08:05:00+05:00")
+
+    def test_missed_window_is_caught_up(self):
+        now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        state = {"channels": {"__digest__": {"last_successful_window": "2026-08-26T20:05:00+05:00"}}}
+        due, window = scheduled_window_due(state, now)
+        self.assertTrue(due)
+        self.assertEqual(window.isoformat(), "2026-08-27T08:05:00+05:00")
+
+    def test_schedule_warning_appears_after_90_minutes(self):
+        state = {"channels": {"__digest__": {"last_successful_window": "2026-08-26T20:05:00+05:00"}}}
+        before = datetime(2026, 8, 27, 9, 34, tzinfo=timezone.utc)
+        after = datetime(2026, 8, 27, 9, 36, tzinfo=timezone.utc)
+        self.assertIsNone(schedule_health_warning(state, before))
+        self.assertIn("91 мин.", schedule_health_warning(state, after))
 
 
 if __name__ == "__main__": unittest.main()

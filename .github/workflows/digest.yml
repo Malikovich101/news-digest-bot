@@ -2,9 +2,10 @@ name: News Digest
 
 on:
   schedule:
-    - cron: '5 3 * * *'
-    - cron: '5 9 * * *'
-    - cron: '5 15 * * *'
+    # GitHub scheduled events can be delayed or dropped under load.
+    # Poll every 30 minutes, offset from the top of the hour; the runtime
+    # decides whether a logical digest window is due.
+    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       replay_hours:
@@ -91,6 +92,7 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python run_digest.py
 
       - name: Save runtime state
