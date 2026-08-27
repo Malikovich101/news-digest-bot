@@ -5,9 +5,9 @@ on:
     # Primary digest releases: 08:05, 14:05 and 20:05 Europe/Perm.
     # GitHub cron uses UTC.
     - cron: '5 3,9,15 * * *'
-    # Safety check every hour at :37. The runtime only acts when a logical
-    # digest window is still outstanding, so this never creates extra digests.
-    - cron: '37 * * * *'
+    # Reliability checks every 15 minutes, offset from the top of the hour.
+    # They only run the full pipeline when a logical digest window is outstanding.
+    - cron: '2,17,32,47 * * * *'
   workflow_dispatch:
     inputs:
       replay_hours:
@@ -70,14 +70,79 @@ jobs:
             echo "{}" > state.json
           fi
 
+      - name: Check whether a digest window is due
+        id: due_check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, time, timezone
+          from zoneinfo import ZoneInfo
+
+          event = os.environ.get("EVENT_NAME", "")
+          replay_hours = int(os.environ.get("REPLAY_HOURS", "0") or "0")
+          if event != "schedule" or replay_hours != 0:
+              print("run=true (manual/PR/replay execution)")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+                  out.write("run=true\n")
+              raise SystemExit
+
+          tz = ZoneInfo("Europe/Perm")
+          now = datetime.now(timezone.utc).astimezone(tz)
+          windows = [(8, 5), (14, 5), (20, 5)]
+          due = None
+          for hour, minute in windows:
+              candidate = datetime.combine(now.date(), time(hour, minute), tzinfo=tz)
+              if candidate <= now:
+                  due = candidate
+
+          if due is None:
+              print(f"run=false; before first digest window; now={now.isoformat()}")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+                  out.write("run=false\n")
+              raise SystemExit
+
+          try:
+              with open("state.json", encoding="utf-8") as fh:
+                  state = json.load(fh)
+          except (FileNotFoundError, json.JSONDecodeError):
+              state = {}
+
+          last_raw = (
+              state.get("channels", {})
+              .get("__digest__", {})
+              .get("last_successful_window")
+          )
+          last = None
+          if last_raw:
+              try:
+                  last = datetime.fromisoformat(last_raw.replace("Z", "+00:00")).astimezone(tz)
+              except ValueError:
+                  last = None
+
+          should_run = last is None or due > last
+          print(
+              f"run={str(should_run).lower()}; now={now.isoformat()}; "
+              f"due_window={due.isoformat()}; last_successful_window={last.isoformat() if last else 'none'}"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"run={str(should_run).lower()}\n")
+          PY
+
       - uses: actions/setup-python@v6
+        if: steps.due_check.outputs.run == 'true'
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.due_check.outputs.run == 'true'
         run: pip install -r requirements.txt
 
       - name: Run unit tests in isolated workspace
+        if: steps.due_check.outputs.run == 'true'
         run: |
           TEST_DIR="$(mktemp -d)"
           tar --exclude=.git --exclude=state.json --exclude='state.json.tmp' -cf - . | tar -xf - -C "$TEST_DIR"
@@ -85,7 +150,7 @@ jobs:
           python -m unittest discover -s tests -v
 
       - name: Run digest script
-        if: github.event_name != 'pull_request'
+        if: steps.due_check.outputs.run == 'true' && github.event_name != 'pull_request'
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
@@ -98,7 +163,7 @@ jobs:
         run: python run_digest.py
 
       - name: Save runtime state
-        if: always() && github.event_name != 'pull_request' && hashFiles('state.json') != ''
+        if: always() && steps.due_check.outputs.run == 'true' && github.event_name != 'pull_request' && hashFiles('state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: state.json
