@@ -2,10 +2,12 @@ name: News Digest
 
 on:
   schedule:
-    # GitHub scheduled events can be delayed or dropped under load.
-    # Poll every 30 minutes, offset from the top of the hour; the runtime
-    # decides whether a logical digest window is due.
-    - cron: '7,37 * * * *'
+    # Primary digest releases: 08:05, 14:05 and 20:05 Europe/Perm.
+    # GitHub cron uses UTC.
+    - cron: '5 3,9,15 * * *'
+    # Safety check every hour at :37. The runtime only acts when a logical
+    # digest window is still outstanding, so this never creates extra digests.
+    - cron: '37 * * * *'
   workflow_dispatch:
     inputs:
       replay_hours:
