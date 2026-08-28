@@ -3,7 +3,6 @@ __pycache__/
 .env
 *.session
 
-# Runtime state files
-state.json
+# state.json is now committed (other AI super-fix), keep.tmp ignored
 state.json.tmp
 bot_offset.json
