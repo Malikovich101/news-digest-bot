@@ -49,7 +49,7 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
-        run: python run_digest.py
+        run: python digest.py
 
       - name: Commit updated state.json
         if: always()

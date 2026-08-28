@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 import requests
-from digest_pipeline import DigestPipeline
+from digest import DigestPipeline
 
 
 def post(text, source_id):
@@ -24,7 +24,7 @@ class DeliveryRegressionTests(unittest.TestCase):
                 raise requests.ConnectionError("network unavailable")
             return Response()
         pipeline = DigestPipeline(state_file="/tmp/news-digest-delivery-regression.json")
-        with patch.object(pipeline, "save_state"), patch("digest_pipeline.requests.post", side_effect=send), patch("digest_pipeline.time.sleep"):
+        with patch.object(pipeline, "save_state"), patch("digest.requests.post", side_effect=send), patch("digest.time.sleep"):
             with self.assertRaises(RuntimeError): pipeline.send_telegram("token", "chat", "", state, posts, rendered_chunks=chunks)
         self.assertEqual(state["delivered_ids"], ["@one:1"])
         self.assertIn("@two:2", state["pending_posts"])

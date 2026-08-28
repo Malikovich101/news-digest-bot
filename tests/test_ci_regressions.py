@@ -3,12 +3,12 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import digest_pipeline
+import digest
 
 
 class CIRegressionTests(unittest.TestCase):
     def test_recent_news_prune_uses_current_72_hour_window(self):
-        now = digest_pipeline.utc_now()
+        now = digest.utc_now()
         recent_news = [
             {
                 "id": "@old:1",
@@ -23,11 +23,11 @@ class CIRegressionTests(unittest.TestCase):
                 "text": "Recent news",
             },
         ]
-        pruned = digest_pipeline.prune_recent_news(recent_news, now)
+        pruned = digest.prune_recent_news(recent_news, now)
         self.assertEqual([item["id"] for item in pruned], ["@recent:1"])
 
     def test_partial_delivery_raises_after_retry_exhaustion(self):
-        pipeline = digest_pipeline.DigestPipeline(state_file="/tmp/news-digest-ci-regression.json")
+        pipeline = digest.DigestPipeline(state_file="/tmp/news-digest-ci-regression.json")
         posts = [
             {
                 "id": "@one:1",
@@ -73,10 +73,10 @@ class CIRegressionTests(unittest.TestCase):
         def send(url, data, timeout):
             calls.append(data["text"])
             if data["text"] == "second chunk":
-                raise digest_pipeline.requests.ConnectionError("network unavailable")
+                raise digest.requests.ConnectionError("network unavailable")
             return Response()
 
-        with patch("digest_pipeline.requests.post", side_effect=send), patch("digest_pipeline.time.sleep"), patch.object(pipeline, "save_state"):
+        with patch("digest.requests.post", side_effect=send), patch("digest.time.sleep"), patch.object(pipeline, "save_state"):
             with self.assertRaises(RuntimeError):
                 pipeline.send_telegram("token", "chat", "", state, posts, rendered_chunks=chunks)
 
@@ -84,8 +84,8 @@ class CIRegressionTests(unittest.TestCase):
         self.assertIn("@two:2", state["pending_posts"])
 
     def test_pending_collection_does_not_mark_channel_as_failed(self):
-        pipeline = digest_pipeline.DigestPipeline()
-        now = digest_pipeline.utc_now()
+        pipeline = digest.DigestPipeline()
+        now = digest.utc_now()
         state = {
             "channels": {},
             "pending_posts": {
