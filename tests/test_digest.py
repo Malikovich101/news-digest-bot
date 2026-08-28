@@ -70,7 +70,7 @@ class DigestUtilityTests(unittest.TestCase):
                 if model == MODELS[0]: raise RuntimeError("503 UNAVAILABLE")
                 return SimpleNamespace(text='{"groups": []}')
         models = Models()
-        with patch("digest_pipeline.time.sleep"):
+        with patch("digest.time.sleep"):
             result = generate_json(SimpleNamespace(models=models), "test")
         self.assertEqual(result, {"groups": []})
         self.assertEqual(models.calls[:3], [MODELS[0]] * 3)
