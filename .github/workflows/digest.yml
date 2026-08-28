@@ -3,7 +3,6 @@ name: News Digest
 on:
   schedule:
     # 08:05, 14:05 and 20:05 Europe/Perm (UTC+5).
-    # Not at the top of the hour to reduce scheduler contention.
     - cron: '5 3 * * *'
     - cron: '5 9 * * *'
     - cron: '5 15 * * *'
@@ -20,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   run-digest:
@@ -29,46 +28,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: main
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify repository state
-        run: |
-          echo "Checked out commit: $(git rev-parse HEAD)"
-          echo "Origin main: $(git rev-parse origin/main)"
-
-      - name: Restore runtime state from cache
-        id: restore-state
-        uses: actions/cache/restore@v5
-        with:
-          path: state.json
-          key: news-digest-state-${{ github.run_id }}
-          restore-keys: |
-            news-digest-state-
-
-      - name: Migrate existing tracked state on first cache miss
-        if: steps.restore-state.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          if [ -f state.json ]; then
-            echo "State restored from workspace."
-            exit 0
-          fi
-
-          last_state_commit=""
-          while read -r commit; do
-            if git cat-file -e "${commit}:state.json" 2>/dev/null; then
-              last_state_commit="$commit"
-              break
-            fi
-          done < <(git log --all --format=%H -- state.json)
-
-          if [ -n "$last_state_commit" ]; then
-            echo "Migrating state.json from historical commit $last_state_commit"
-            git show "${last_state_commit}:state.json" > state.json
-          else
-            echo "No historical state found; starting with empty runtime state."
-          fi
+          fetch-depth: 1
 
       - uses: actions/setup-python@v6
         with:
@@ -77,12 +37,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run unit tests in isolated workspace
-        run: |
-          TEST_DIR="$(mktemp -d)"
-          tar --exclude=.git --exclude=state.json --exclude='state.json.tmp' -cf - . | tar -xf - -C "$TEST_DIR"
-          cd "$TEST_DIR"
-          python -m unittest discover -s tests -v
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
 
       - name: Run digest script
         env:
@@ -95,26 +51,39 @@ jobs:
           REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
         run: python run_digest.py
 
-      - name: Clear completed delivery checkpoints
-        if: success()
+      - name: Commit updated state.json
+        if: always()
         run: |
-          python - <<'PY'
+          if [ -f state.json ]; then
+            # normalize delivered_chunks to avoid unbounded growth in commits
+            python - <<'PY'
           import json
           from pathlib import Path
-
-          path = Path("state.json")
-          if path.exists():
-              state = json.loads(path.read_text(encoding="utf-8"))
-              state["delivered_chunks"] = []
-              path.write_text(
-                  json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                  encoding="utf-8",
-              )
+          p = Path("state.json")
+          if p.exists():
+              s = json.loads(p.read_text(encoding="utf-8"))
+              # keep file tidy - clear delivered_chunks after successful send (optional)
+              # don't clear pending/delivered_ids - they are needed for dedup
+              s["delivered_chunks"] = []
+              p.write_text(json.dumps(s, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
+          fi
+          if [ -n "$(git status --porcelain state.json)" ]; then
+            git config user.name "news-digest-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add state.json
+            git commit -m "chore: update runtime state [skip ci]"
+            git push
+          else
+            echo "state.json unchanged, nothing to commit."
+          fi
 
-      - name: Save runtime state to cache
-        if: always() && hashFiles('state.json') != ''
-        uses: actions/cache/save@v5
-        with:
-          path: state.json
-          key: news-digest-state-${{ github.run_id }}
+      - name: Notify on failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d text="⚠️ News Digest: запуск завершился ошибкой. Смотри Actions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

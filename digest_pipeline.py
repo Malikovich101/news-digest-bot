@@ -13,6 +13,14 @@ import requests
 from google import genai
 from telethon.sessions import StringSession
 from telethon.sync import TelegramClient
+from telethon.errors import (
+    FloodWaitError,
+    RPCError,
+    UserDeactivatedError,
+    UsernameNotOccupiedError,
+    InviteHashEmptyError,
+    ChannelPrivateError,
+)
 
 CHUNK_DELAY_SECONDS = 0.35
 STATE_FILE = "state.json"
@@ -37,6 +45,7 @@ MAX_PENDING_POSTS = 5_000
 PENDING_TTL_HOURS = 96
 TELEGRAM_MESSAGE_LIMIT = 3900
 WATCHDOG_MAX_GAP_HOURS = 8
+CHANNEL_FETCH_DELAY_SECONDS = 0.5
 
 AD_MARKERS = (
     "#реклама", "erid", "промокод", "рекламная интеграция",
@@ -650,6 +659,23 @@ class DigestPipeline:
                     channel_posts.append(post)
                 posts.extend(channel_posts)
                 channel_updates[channel] = {"last_message_id": newest_seen_id, "last_checked_at": now.isoformat()}
+                if channel != channels[-1]:
+                    time.sleep(CHANNEL_FETCH_DELAY_SECONDS)
+            except FloodWaitError as error:
+                print(f"Telegram flood limit: ждём {error.seconds}с перед следующим каналом.")
+                time.sleep(error.seconds + 1)
+                failed_channels.append(channel)
+            except (
+                UserDeactivatedError,
+                UsernameNotOccupiedError,
+                InviteHashEmptyError,
+                ChannelPrivateError,
+            ) as error:
+                print(f"Пропускаю нерабочий канал {channel}: {error}")
+                failed_channels.append(channel)
+            except RPCError as error:
+                print(f"Ошибка Telegram для {channel}: {error}")
+                failed_channels.append(channel)
             except Exception as error:
                 failed_channels.append(channel)
                 print(f"Не удалось прочитать {channel}: {error}")
@@ -740,20 +766,37 @@ class DigestPipeline:
         ai_unavailable = False
         confirmed_ads = semantic_duplicates = cross_run_duplicates = 0
         posts, stats = filter_and_deduplicate(collected)
+        client = None
         if posts:
             try:
                 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            except Exception as error:
+                ai_unavailable = True
+                print(f"Gemini client init failed: {error}")
+
+        if posts and client is not None:
+            try:
                 posts, confirmed_ads = review_suspicious_ads(client, posts)
-                if replay_hours == 0:
+            except Exception as error:
+                ai_unavailable = True
+                print(f"Gemini ad review failed: {error}")
+
+            if replay_hours == 0:
+                try:
                     history_by_id = {}
                     for item in state.get("recent_news", []) + state.get("event_memory", []):
                         if isinstance(item, dict) and item.get("id"):
                             history_by_id[item["id"]] = item
                     posts, cross_run_duplicates = cross_run_semantic_deduplicate(client, posts, list(history_by_id.values()))
+                except Exception as error:
+                    ai_unavailable = True
+                    print(f"Gemini cross-run dedup failed: {error}")
+
+            try:
                 posts, semantic_duplicates = semantic_deduplicate(client, posts)
-            except RuntimeError as error:
+            except Exception as error:
                 ai_unavailable = True
-                print(f"Gemini unavailable, sending without AI filtering: {error}")
+                print(f"Gemini semantic dedup failed: {error}")
 
         if posts:
             digest_text = format_digest(posts, stats, semantic_duplicates, confirmed_ads, ai_unavailable, cross_run_duplicates)
