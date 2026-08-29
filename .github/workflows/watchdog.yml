@@ -36,6 +36,23 @@ jobs:
           state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
           completed = state.get("completed_slots", {}) or {}
           now = datetime.datetime.now(datetime.timezone.utc)
+
+          # v6 did not record slot ids. Infer its latest successful slot during
+          # the first deployment so it is not mistaken for a missed digest.
+          last_success = state.get("last_successful_run")
+          if not completed and last_success:
+              try:
+                  last_dt = datetime.datetime.fromisoformat(last_success.replace("Z", "+00:00"))
+                  legacy_slots = []
+                  for day in (last_dt.date() - datetime.timedelta(days=1), last_dt.date()):
+                      for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
+                          expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
+                          if expected <= last_dt:
+                              legacy_slots.append((expected, f"{day.isoformat()}-{name}"))
+                  if legacy_slots:
+                      completed[max(legacy_slots)[1]] = last_dt.isoformat()
+              except (TypeError, ValueError):
+                  pass
           candidates = []
 
           # Keep yesterday's evening slot eligible after midnight as well.
