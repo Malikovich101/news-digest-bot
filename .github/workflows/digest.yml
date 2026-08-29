@@ -13,9 +13,14 @@ on:
         required: false
         default: '0'
         type: string
+      slot_id:
+        description: 'Идентификатор пропущенного слота; задаётся watchdog автоматически'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
-  group: news-digest-runtime-state
+  group: news-digest-repository-state
   cancel-in-progress: false
 
 permissions:
@@ -40,6 +45,25 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
+      - name: Determine delivery slot
+        id: slot
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          DISPATCH_SLOT: ${{ inputs.slot_id }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "slot_id=$DISPATCH_SLOT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$SCHEDULE" in
+            "5 3 * * *") suffix="morning" ;;
+            "5 9 * * *") suffix="day" ;;
+            "5 15 * * *") suffix="evening" ;;
+            *) echo "Unknown schedule: $SCHEDULE" >&2; exit 1 ;;
+          esac
+          echo "slot_id=$(date -u +%F)-$suffix" >> "$GITHUB_OUTPUT"
+
       - name: Run digest script
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
@@ -49,6 +73,7 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
+          DIGEST_SLOT_ID: ${{ steps.slot.outputs.slot_id }}
         run: python digest.py
 
       - name: Commit updated state.json
@@ -68,12 +93,18 @@ jobs:
               p.write_text(json.dumps(s, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
           fi
-          if [ -n "$(git status --porcelain state.json)" ]; then
+          if [ -n "$(git status --porcelain state.json run_history.jsonl)" ]; then
             git config user.name "news-digest-bot"
             git config user.email "actions@users.noreply.github.com"
-            git add state.json
+            git add state.json run_history.jsonl
             git commit -m "chore: update runtime state [skip ci]"
-            git push
+            for attempt in 1 2 3; do
+              git pull --rebase origin main && git push && exit 0
+              git rebase --abort || true
+              sleep "$attempt"
+            done
+            echo "Unable to persist runtime state after retries." >&2
+            exit 1
           else
             echo "state.json unchanged, nothing to commit."
           fi

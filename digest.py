@@ -25,6 +25,7 @@ from telethon.errors import (
 CHUNK_DELAY_SECONDS = 0.35
 STATE_FILE = "state.json"
 CHANNELS_FILE = "channels.txt"
+RUN_HISTORY_FILE = "run_history.jsonl"
 MODELS = ("gemini-3.5-flash", "gemini-3.5-flash-lite")
 FIRST_RUN_LOOKBACK_HOURS = 9
 MIN_TEXT_LENGTH = 20
@@ -39,12 +40,11 @@ RECENT_NEWS_HOURS = 72
 MAX_RECENT_NEWS = 500
 MAX_RECENT_NEWS_CHARS = 700
 RECENT_NEWS_HISTORY_BATCH = 40
-EVENT_MEMORY_HOURS = 14 * 24
+EVENT_MEMORY_HOURS = 72
 MAX_EVENT_MEMORY = 1_000
 MAX_PENDING_POSTS = 5_000
 PENDING_TTL_HOURS = 96
 TELEGRAM_MESSAGE_LIMIT = 3900
-WATCHDOG_MAX_GAP_HOURS = 8
 CHANNEL_FETCH_DELAY_SECONDS = 0.5
 
 AD_MARKERS = (
@@ -66,6 +66,27 @@ COMMON_WORDS = {
 
 def utc_now():
     return datetime.now(timezone.utc)
+
+
+def normalized_duplicate_text(text):
+    """Stable key for literal reposts, ignoring channel signatures and decoration."""
+    value = analysis_text(text).lower()
+    value = URL_RE.sub(" ", value)
+    value = re.sub(r"@[a-z0-9_]{5,}", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"#[\wа-яё]+", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def append_run_history(entry):
+    """Keep a small, human-readable diagnostic trail in the repository."""
+    rows = []
+    if os.path.exists(RUN_HISTORY_FILE):
+        with open(RUN_HISTORY_FILE, "r", encoding="utf-8") as source:
+            rows = [line for line in source if line.strip()][-199:]
+    rows.append(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    with open(RUN_HISTORY_FILE, "w", encoding="utf-8") as output:
+        output.writelines(rows)
 
 
 def load_channels():
@@ -354,17 +375,6 @@ def review_suspicious_ads(client, posts):
     return [post for post in posts if post["id"] not in dropped], len(dropped)
 
 
-def semantic_deduplication_pass(client, posts, text_limit, overlap=0):
-    dropped = set()
-    for batch in make_ai_batches(posts, text_limit, overlap):
-        active = [post for post in batch if post["id"] not in dropped]
-        if len(active) < 2:
-            continue
-        response = generate_json(client, duplicate_prompt(active, text_limit))
-        dropped.update(duplicate_ids_from_response(response, {post["id"] for post in active}))
-    return [post for post in posts if post["id"] not in dropped], len(dropped)
-
-
 def semantic_deduplicate(client, posts):
     dropped = set()
     for cluster in candidate_clusters(posts):
@@ -373,9 +383,9 @@ def semantic_deduplicate(client, posts):
             continue
         response = generate_json(client, duplicate_prompt(active, MAX_MODEL_POST_CHARS))
         dropped.update(duplicate_ids_from_response(response, {post["id"] for post in active}))
-    focused_posts = [post for post in posts if post["id"] not in dropped]
-    final_posts, final_count = semantic_deduplication_pass(client, focused_posts, MAX_PREVIEW_CHARS, overlap=20)
-    return final_posts, len(dropped) + final_count
+    # Do not ask the model to compare every remaining post. A broad pass can
+    # mistake a genuine update for a duplicate and silently hide a news item.
+    return [post for post in posts if post["id"] not in dropped], len(dropped)
 
 
 def cross_run_semantic_deduplicate(client, posts, recent_news):
@@ -407,7 +417,7 @@ def filter_and_deduplicate(posts):
             continue
         if needs_ad_review(comparable):
             stats["ad_review"] += 1
-        exact_key = comparable.lower()
+        exact_key = normalized_duplicate_text(comparable)
         links = extract_urls(comparable)
         is_link_repost = len(text_without_urls) <= 80 and bool(links & seen_link_posts)
         if exact_key in seen_text or is_link_repost:
@@ -477,7 +487,7 @@ def chunk_checkpoint_id(chunk):
 
 
 def require_environment():
-    required = ("TG_API_ID", "TG_API_HASH", "TG_SESSION_STRING", "TG_BOT_TOKEN", "TG_CHAT_ID", "GEMINI_API_KEY")
+    required = ("TG_API_ID", "TG_API_HASH", "TG_SESSION_STRING", "TG_BOT_TOKEN", "TG_CHAT_ID")
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"Missing required secrets: {', '.join(missing)}")
@@ -494,24 +504,10 @@ def replay_hours_from_environment():
     return hours
 
 
-def watchdog_check(state, now):
-    last_run = state.get("last_successful_run")
-    if not last_run:
-        return False
-    last_run_dt = parse_datetime(last_run, None)
-    if last_run_dt is None:
-        return False
-    gap_hours = (now - last_run_dt).total_seconds() / 3600
-    if gap_hours > WATCHDOG_MAX_GAP_HOURS:
-        print(f"WATCHDOG: Last successful run was {gap_hours:.1f}h ago (threshold: {WATCHDOG_MAX_GAP_HOURS}h)")
-        return True
-    return False
-
-
 def migrate_state(raw):
     raw = raw if isinstance(raw, dict) else {}
     state = {
-        "version": 6,
+        "version": 7,
         "channels": raw.get("channels", {}),
         "pending_posts": raw.get("pending_posts", {}) or {},
         "delivered_ids": list(dict.fromkeys(raw.get("delivered_ids", [])))[-MAX_DELIVERED_IDS:],
@@ -520,6 +516,7 @@ def migrate_state(raw):
         "recent_news": raw.get("recent_news", []) or [],
         "event_memory": raw.get("event_memory", []) or [],
         "last_successful_run": raw.get("last_successful_run"),
+        "completed_slots": raw.get("completed_slots", {}) or {},
     }
     if not state["event_memory"]:
         state["event_memory"] = list(state["recent_news"])
@@ -545,7 +542,13 @@ def prune_state(state, now):
             memory.append(item)
     memory.sort(key=lambda item: item.get("delivered_at", ""), reverse=True)
     state["event_memory"] = memory[:MAX_EVENT_MEMORY]
-    state["version"] = 6
+    slot_cutoff = now - timedelta(days=7)
+    state["completed_slots"] = {
+        slot: completed_at
+        for slot, completed_at in state.get("completed_slots", {}).items()
+        if parse_datetime(completed_at, None) and parse_datetime(completed_at, None) >= slot_cutoff
+    }
+    state["version"] = 7
     return state
 
 
@@ -712,10 +715,14 @@ class DigestPipeline:
         self.save_state(state)
 
     def run(self):
-        require_environment()
         now = utc_now()
         state = self.load_state()
-        watchdog_missed = watchdog_check(state, now)
+        slot_id = os.environ.get("DIGEST_SLOT_ID", "").strip()
+        if slot_id and slot_id in state.get("completed_slots", {}):
+            print(f"Slot {slot_id} already completed; skipping duplicate run.")
+            return {"status": "skipped", "slot_id": slot_id, "reason": "slot already completed"}
+
+        require_environment()
         channels = load_channels()
         replay_hours = replay_hours_from_environment()
         if not channels:
@@ -743,12 +750,16 @@ class DigestPipeline:
         # но pending чистим только после всех AI-этапов, чтобы не оставить кросс-дубли
         posts, stats = filter_and_deduplicate(collected)
         client = None
-        if posts:
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if posts and gemini_key:
             try:
-                client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+                client = genai.Client(api_key=gemini_key)
             except Exception as error:
                 ai_unavailable = True
                 print(f"Gemini client init failed: {error}")
+        elif posts:
+            ai_unavailable = True
+            print("Gemini API key is not configured; using safe non-AI fallback.")
 
         if posts and client is not None:
             try:
@@ -795,8 +806,6 @@ class DigestPipeline:
         warnings = []
         if ai_unavailable:
             warnings.append("⚠️ Gemini недоступен: возможны дубли.")
-        if watchdog_missed:
-            warnings.append("⚠️ Внимание: предыдущий дайджест был пропущен.")
         if failed_channels:
             warnings.append("⚠️ Не удалось проверить: " + ", ".join(failed_channels))
         for warning in warnings:
@@ -809,6 +818,8 @@ class DigestPipeline:
             delivered_at = utc_now()
             remember_delivered_news(state, posts, delivered_at)
             state["last_successful_run"] = delivered_at.isoformat()
+            if slot_id:
+                state.setdefault("completed_slots", {})[slot_id] = delivered_at.isoformat()
             self.save_state(state)
         else:
             self.save_state(state)
@@ -818,10 +829,39 @@ class DigestPipeline:
             f"(semantic_duplicates={semantic_duplicates}, cross_run_duplicates={cross_run_duplicates}, "
             f"confirmed_ads={confirmed_ads}, replay_hours={replay_hours}, channels_updated={len(channel_updates)})"
         )
+        return {
+            "status": "success",
+            "slot_id": slot_id or None,
+            "source_posts": stats["source_posts"],
+            "delivered_posts": len(posts),
+            "explicit_ads": stats["ads"],
+            "semantic_duplicates": semantic_duplicates,
+            "cross_run_duplicates": cross_run_duplicates,
+            "failed_channels": failed_channels,
+            "ai_unavailable": ai_unavailable,
+        }
 
 
 def main():
-    DigestPipeline().run()
+    started_at = utc_now()
+    try:
+        result = DigestPipeline().run()
+        append_run_history({
+            "timestamp": utc_now().isoformat(),
+            "started_at": started_at.isoformat(),
+            "run_id": os.environ.get("GITHUB_RUN_ID"),
+            **result,
+        })
+    except Exception as error:
+        append_run_history({
+            "timestamp": utc_now().isoformat(),
+            "started_at": started_at.isoformat(),
+            "run_id": os.environ.get("GITHUB_RUN_ID"),
+            "status": "failed",
+            "slot_id": os.environ.get("DIGEST_SLOT_ID") or None,
+            "error": f"{type(error).__name__}: {error}",
+        })
+        raise
 
 
 if __name__ == "__main__":

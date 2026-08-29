@@ -1,4 +1,5 @@
 import unittest
+import os
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -19,6 +20,13 @@ def post(source_id, date, text):
 
 
 class DigestPipelineTests(unittest.TestCase):
+    def test_completed_slot_skips_duplicate_recovery_run(self):
+        pipeline = digest.DigestPipeline()
+        with patch.object(pipeline, "load_state", return_value={"completed_slots": {"2026-08-30-morning": "2026-08-30T03:20:00+00:00"}}), patch.dict(os.environ, {"DIGEST_SLOT_ID": "2026-08-30-morning"}, clear=True):
+            result = pipeline.run()
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["slot_id"], "2026-08-30-morning")
+
     def test_telegram_chunks_are_rate_limited(self):
         pipeline = digest.DigestPipeline(state_file="/tmp/news-digest-test-state.json")
         state = {"version": 6, "delivered_chunks": [], "delivered_ids": [], "recent_news": [], "event_memory": [], "channels": {}}
@@ -98,19 +106,6 @@ class GeminiFallbackTests(unittest.TestCase):
         self.assertEqual(len(posts), 2)
 
 
-
-
-class WatchdogTests(unittest.TestCase):
-    def test_no_last_run_no_warning(self):
-        self.assertFalse(digest.watchdog_check({}, digest.utc_now()))
-
-    def test_recent_run_no_warning(self):
-        state = {"last_successful_run": (digest.utc_now() - timedelta(hours=2)).isoformat()}
-        self.assertFalse(digest.watchdog_check(state, digest.utc_now()))
-
-    def test_old_run_triggers_warning(self):
-        state = {"last_successful_run": (digest.utc_now() - timedelta(hours=12)).isoformat()}
-        self.assertTrue(digest.watchdog_check(state, digest.utc_now()))
 
 
 if __name__ == "__main__":

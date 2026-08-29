@@ -24,6 +24,15 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertEqual(stats["ad_review"], 1)
         self.assertTrue(is_suspicious_ad(kept[0]["text"]))
 
+    def test_literal_repost_with_different_link_and_signature_is_filtered(self):
+        posts = [
+            post("Компания представила новый продукт. https://example.com/a @channelone", "@one:1"),
+            post("Компания представила новый продукт. https://example.com/b @channeltwo", "@two:2"),
+        ]
+        kept, stats = filter_and_deduplicate(posts)
+        self.assertEqual([item["id"] for item in kept], ["@one:1"])
+        self.assertEqual(stats["python_duplicates"], 1)
+
     def test_gemini_can_remove_only_confirmed_ads(self):
         posts = [post("Купите курс со скидкой 50% прямо сейчас!", "@one:1"), post("Компания снизила цены на лекарства, пациенты получат помощь дешевле.", "@two:2")]
         class Models:

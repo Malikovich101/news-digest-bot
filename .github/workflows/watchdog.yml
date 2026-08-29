@@ -2,16 +2,17 @@ name: Digest Watchdog
 
 on:
   schedule:
-    # каждые 30 минут проверяем, не пропустили ли дайджест (страховка от задержек GitHub cron)
-    - cron: '*/30 * * * *'
+    # Four checks per hour, away from :00 when GitHub Actions is busiest.
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  actions: write
+  contents: read
 
 concurrency:
   group: digest-watchdog
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -22,66 +23,47 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Check if digest is overdue
+      - name: Find a missing delivery slot
         id: check
         run: |
           python - <<'PY'
-          import json, os, datetime
+          import datetime
+          import json
+          import os
           from pathlib import Path
 
-          STATE = Path("state.json")
-          if not STATE.exists():
-              print("no state.json, triggering digest")
-              print("overdue=true")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("overdue=true\n")
-              raise SystemExit
+          state_path = Path("state.json")
+          state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+          completed = state.get("completed_slots", {}) or {}
+          now = datetime.datetime.now(datetime.timezone.utc)
+          candidates = []
 
-          state = json.loads(STATE.read_text(encoding="utf-8"))
-          last = state.get("last_successful_run")
-          # Ожидаемые слоты Перми 08:05, 14:05, 20:05 = 03:05, 09:05, 15:05 UTC
-          # Watchdog срабатывает если с последнего успеха прошло > 7 часов
-          # и сейчас уже после ближайшего слота + 45 минут допуска
-          from datetime import timezone, timedelta
-          def parse(s):
-              try:
-                  return datetime.datetime.fromisoformat(s.replace("Z","+00:00"))
-              except:
-                  return None
+          # Keep yesterday's evening slot eligible after midnight as well.
+          for day in (now.date() - datetime.timedelta(days=1), now.date()):
+              for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
+                  expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
+                  slot_id = f"{day.isoformat()}-{name}"
+                  if expected + datetime.timedelta(minutes=15) <= now <= expected + datetime.timedelta(hours=24):
+                      if slot_id not in completed:
+                          candidates.append((expected, slot_id))
 
-          now = datetime.datetime.now(timezone.utc)
-          last_dt = parse(last) if last else None
-          if not last_dt:
-              overdue = True
-          else:
-              gap_hours = (now - last_dt).total_seconds() / 3600
-              # считаем overdue если > 7ч с последнего успеха и мы уже после слота
-              overdue = gap_hours > 7
-
-              # дополнительно: если сейчас 04:00-06:00 UTC (после 08:05 Перми) и gap > 6ч — тоже триггерим
-              hour = now.hour + now.minute/60
-              # слоты 3.08, 9.08, 15.08 UTC (+0.75ч допуск)
-              slots = [3.08+0.75, 9.08+0.75, 15.08+0.75]
-              # был ли слот после last_dt и до now?
-              # упрощённо: если gap > 6.5 и сейчас близко после слота
-              if gap_hours > 6.5 and any(s < (hour % 24) < s+3 for s in [3.8, 9.8, 15.8]):
-                  overdue = True
-
-          print(f"last={last} now={now.isoformat()} overdue={overdue}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"overdue={'true' if overdue else 'false'}\n")
+          candidates.sort()
+          slot_id = candidates[0][1] if candidates else ""
+          print(f"now={now.isoformat()} completed={len(completed)} missing_slot={slot_id or 'none'}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"slot_id={slot_id}\n")
           PY
 
-      - name: Trigger digest if overdue
-        if: steps.check.outputs.overdue == 'true'
+      - name: Trigger only the missing slot
+        if: steps.check.outputs.slot_id != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLOT_ID: ${{ steps.check.outputs.slot_id }}
         run: |
-          echo "Digest is overdue, triggering workflow_dispatch..."
-          gh workflow run "News Digest" --repo "$GITHUB_REPOSITORY" --ref main -f replay_hours=0 || \
-          gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/digest.yml/dispatches" -f ref=main -f inputs='{"replay_hours":"0"}'
-          echo "Triggered."
+          echo "Digest slot $SLOT_ID is missing; requesting a recovery run."
+          gh workflow run "News Digest" --repo "$GITHUB_REPOSITORY" --ref main \
+            -f replay_hours=0 -f slot_id="$SLOT_ID"
 
-      - name: Log skip
-        if: steps.check.outputs.overdue != 'true'
-        run: echo "Digest is not overdue, skipping."
+      - name: Log healthy status
+        if: steps.check.outputs.slot_id == ''
+        run: echo "All eligible digest slots have completed."
