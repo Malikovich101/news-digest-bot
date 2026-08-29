@@ -506,6 +506,20 @@ def replay_hours_from_environment():
 
 def migrate_state(raw):
     raw = raw if isinstance(raw, dict) else {}
+    completed_slots = raw.get("completed_slots", {}) or {}
+    # One-time migration from v6: preserve the latest known successful slot so
+    # the new watchdog does not send an unnecessary catch-up digest on deploy.
+    last_success = raw.get("last_successful_run")
+    last_success_dt = parse_datetime(last_success, None)
+    if not completed_slots and last_success_dt:
+        possible_slots = []
+        for day in (last_success_dt.date() - timedelta(days=1), last_success_dt.date()):
+            for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
+                expected = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=hour, minutes=5)
+                if expected <= last_success_dt:
+                    possible_slots.append((expected, f"{day.isoformat()}-{name}"))
+        if possible_slots:
+            completed_slots[max(possible_slots)[1]] = last_success_dt.isoformat()
     state = {
         "version": 7,
         "channels": raw.get("channels", {}),
@@ -515,8 +529,8 @@ def migrate_state(raw):
         "delivered_chunks": list(dict.fromkeys(raw.get("delivered_chunks", [])))[-MAX_DELIVERED_CHUNKS:],
         "recent_news": raw.get("recent_news", []) or [],
         "event_memory": raw.get("event_memory", []) or [],
-        "last_successful_run": raw.get("last_successful_run"),
-        "completed_slots": raw.get("completed_slots", {}) or {},
+        "last_successful_run": last_success,
+        "completed_slots": completed_slots,
     }
     if not state["event_memory"]:
         state["event_memory"] = list(state["recent_news"])
