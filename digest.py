@@ -739,23 +739,9 @@ class DigestPipeline:
 
         ai_unavailable = False
         confirmed_ads = semantic_duplicates = cross_run_duplicates = 0
+        # Предварительная детерминированная фильтрация для подсчёта статистики,
+        # но pending чистим только после всех AI-этапов, чтобы не оставить кросс-дубли
         posts, stats = filter_and_deduplicate(collected)
-        # FIX: чистим pending от мусора (реклама/дубли), которые никогда не доставятся,
-        # и добавляем только каноничные посты. Раньше в pending копилось всё подряд.
-        if replay_hours == 0:
-            canonical_ids = {post["id"] for post in posts}
-            # удалить из pending то, что отфильтровалось как мусор
-            for pid in list(state.get("pending_posts", {}).keys()):
-                if pid not in canonical_ids:
-                    # если pid был в исходном collected, но не попал в канонические — это мусор, удаляем
-                    if pid in merged:
-                        state["pending_posts"].pop(pid, None)
-            # добавить канонические посты в pending для ретрая доставки
-            if posts:
-                self.add_pending_posts(state, posts, now)
-            elif not posts and collected:
-                # если всё отфильтровалось, pending уже почищен, сохраняем
-                self.save_state(state)
         client = None
         if posts:
             try:
@@ -787,6 +773,18 @@ class DigestPipeline:
             except Exception as error:
                 ai_unavailable = True
                 print(f"Gemini semantic dedup failed: {error}")
+
+        # FIX: pending теперь после всех фильтров — чистим мусор и добавляем только финальные посты
+        if replay_hours == 0:
+            final_ids = {post["id"] for post in posts}
+            for pid in list(state.get("pending_posts", {}).keys()):
+                if pid in merged and pid not in final_ids:
+                    state["pending_posts"].pop(pid, None)
+            if posts:
+                self.add_pending_posts(state, posts, now)
+            elif collected:
+                # всё отфильтровалось — просто чистим и сохраняем
+                self.save_state(state)
 
         if posts:
             digest_text = format_digest(posts, stats, semantic_duplicates, confirmed_ads, ai_unavailable, cross_run_duplicates)
