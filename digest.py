@@ -721,26 +721,41 @@ class DigestPipeline:
         if not channels:
             raise RuntimeError("channels.txt is empty")
 
-        pending_for_retry = [item for item in state.get("pending_posts", {}).values() if isinstance(item, dict)]
-        if replay_hours == 0 and pending_for_retry:
-            collected = pending_for_retry
-            channel_updates = {}
-            failed_channels = []
-        else:
-            with TelegramClient(StringSession(os.environ["TG_SESSION_STRING"]), int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as telegram_client:
-                collected, channel_updates, failed_channels = self.collect_posts(telegram_client, channels, state, now, replay_hours)
-            if failed_channels and len(failed_channels) == len(channels):
-                raise RuntimeError("All configured channels failed to load")
-
+        pending_for_retry = [item for item in state.get("pending_posts", {}).values() if isinstance(item, dict)] if replay_hours == 0 else []
+        # FIX: всегда собираем свежие посты, даже если есть pending. Раньше pending блокировал
+        # сбор новых сообщений и замораживал watermark каналов на 17:18 (12ч). Теперь мержим.
+        with TelegramClient(StringSession(os.environ["TG_SESSION_STRING"]), int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"]) as telegram_client:
+            collected_fresh, channel_updates, failed_channels = self.collect_posts(telegram_client, channels, state, now, replay_hours)
+        if failed_channels and len(failed_channels) == len(channels) and not pending_for_retry:
+            raise RuntimeError("All configured channels failed to load")
+        # Мержим pending + свежие (дедуп по id, свежие приоритетнее)
+        merged = {post["id"]: post for post in pending_for_retry}
+        for post in collected_fresh:
+            merged[post["id"]] = post
+        collected = list(merged.values())
         collected.sort(key=lambda post: post["date"])
-        if replay_hours == 0 and collected:
-            self.add_pending_posts(state, collected, now)
         state["channels"].update(channel_updates)
         self.save_state(state)
 
         ai_unavailable = False
         confirmed_ads = semantic_duplicates = cross_run_duplicates = 0
         posts, stats = filter_and_deduplicate(collected)
+        # FIX: чистим pending от мусора (реклама/дубли), которые никогда не доставятся,
+        # и добавляем только каноничные посты. Раньше в pending копилось всё подряд.
+        if replay_hours == 0:
+            canonical_ids = {post["id"] for post in posts}
+            # удалить из pending то, что отфильтровалось как мусор
+            for pid in list(state.get("pending_posts", {}).keys()):
+                if pid not in canonical_ids:
+                    # если pid был в исходном collected, но не попал в канонические — это мусор, удаляем
+                    if pid in merged:
+                        state["pending_posts"].pop(pid, None)
+            # добавить канонические посты в pending для ретрая доставки
+            if posts:
+                self.add_pending_posts(state, posts, now)
+            elif not posts and collected:
+                # если всё отфильтровалось, pending уже почищен, сохраняем
+                self.save_state(state)
         client = None
         if posts:
             try:
