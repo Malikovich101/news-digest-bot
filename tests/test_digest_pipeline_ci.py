@@ -5,6 +5,15 @@ import digest
 
 
 class CurrentPipelineRegressionTests(unittest.TestCase):
+    def test_delivery_receipts_older_than_three_days_are_pruned(self):
+        now = digest.utc_now()
+        state = digest.migrate_state({"delivery_receipts": {
+            "old": {"sent_at": (now - timedelta(hours=80)).isoformat(), "post_ids": []},
+            "recent": {"sent_at": (now - timedelta(hours=2)).isoformat(), "post_ids": []},
+        }})
+        result = digest.prune_state(state, now)
+        self.assertEqual(set(result["delivery_receipts"]), {"recent"})
+
     def test_recent_news_older_than_72_hours_is_pruned(self):
         now = digest.utc_now()
         items = [

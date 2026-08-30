@@ -547,6 +547,14 @@ def prune_state(state, now):
         if collected_at and collected_at >= cutoff:
             pending[post_id] = post
     state["pending_posts"] = dict(list(pending.items())[-MAX_PENDING_POSTS:])
+    receipt_cutoff = now - timedelta(hours=RECENT_NEWS_HOURS)
+    state["delivery_receipts"] = {
+        checkpoint: receipt
+        for checkpoint, receipt in state.get("delivery_receipts", {}).items()
+        if isinstance(receipt, dict)
+        and parse_datetime(receipt.get("sent_at"), None)
+        and parse_datetime(receipt.get("sent_at"), None) >= receipt_cutoff
+    }
     state["recent_news"] = prune_recent_news(state.get("recent_news", []), now)
     memory = []
     memory_cutoff = now - timedelta(hours=EVENT_MEMORY_HOURS)
@@ -687,7 +695,7 @@ class DigestPipeline:
     def post_ids_in_chunk(self, chunk, posts):
         return [post["id"] for post in posts if post.get("url") and post["url"] in chunk]
 
-    def send_telegram(self, token, chat_id, text, state, posts, rendered_chunks=None):
+    def send_telegram(self, token, chat_id, text, state, posts, rendered_chunks=None, allow_repeat=False):
         chunks = rendered_chunks or [
             {"id": chunk_checkpoint_id(chunk), "text": chunk, "post_ids": self.post_ids_in_chunk(chunk, posts)}
             for chunk in telegram_chunks(text)
@@ -696,7 +704,7 @@ class DigestPipeline:
         delivered_checkpoints = set(state.get("delivered_chunks", [])) | set(receipts)
         for index, record in enumerate(chunks):
             checkpoint = record["id"]
-            if checkpoint in delivered_checkpoints:
+            if not allow_repeat and checkpoint in delivered_checkpoints:
                 continue
             last_error = None
             for attempt in range(RETRY_ATTEMPTS):
@@ -718,8 +726,9 @@ class DigestPipeline:
                         time.sleep(2 ** attempt)
             else:
                 raise RuntimeError(f"Telegram delivery failed on chunk {index + 1}/{len(chunks)}: {last_error}")
-            receipts[checkpoint] = {"sent_at": utc_now().isoformat(), "post_ids": record.get("post_ids", [])}
-            state["delivered_chunks"] = list(dict.fromkeys(state.get("delivered_chunks", []) + [checkpoint]))[-MAX_DELIVERED_CHUNKS:]
+            if not allow_repeat:
+                receipts[checkpoint] = {"sent_at": utc_now().isoformat(), "post_ids": record.get("post_ids", [])}
+                state["delivered_chunks"] = list(dict.fromkeys(state.get("delivered_chunks", []) + [checkpoint]))[-MAX_DELIVERED_CHUNKS:]
             for post_id in record.get("post_ids", []):
                 state.setdefault("pending_posts", {}).pop(post_id, None)
                 state.setdefault("delivered_ids", []).append(post_id)
@@ -755,9 +764,6 @@ class DigestPipeline:
             merged[post["id"]] = post
         collected = list(merged.values())
         collected.sort(key=lambda post: post["date"])
-        state["channels"].update(channel_updates)
-        self.save_state(state)
-
         ai_unavailable = False
         confirmed_ads = semantic_duplicates = cross_run_duplicates = 0
         # Предварительная детерминированная фильтрация для подсчёта статистики,
@@ -826,7 +832,15 @@ class DigestPipeline:
             rendered_chunks.append({"id": chunk_checkpoint_id(warning), "text": warning, "post_ids": []})
 
         delivery_text = "\n\n".join(record["text"] for record in rendered_chunks)
-        self.send_telegram(os.environ["TG_BOT_TOKEN"], os.environ["TG_CHAT_ID"], delivery_text, state, posts, rendered_chunks=[{"id": chunk_checkpoint_id(chunk), "text": chunk, "post_ids": self.post_ids_in_chunk(chunk, posts)} for chunk in telegram_chunks(delivery_text)])
+        self.send_telegram(
+            os.environ["TG_BOT_TOKEN"], os.environ["TG_CHAT_ID"], delivery_text, state, posts,
+            rendered_chunks=[{"id": chunk_checkpoint_id(chunk), "text": chunk, "post_ids": self.post_ids_in_chunk(chunk, posts)} for chunk in telegram_chunks(delivery_text)],
+            # A "no news" report must be delivered on every scheduled slot,
+            # even though its text is intentionally identical to earlier ones.
+            allow_repeat=not posts,
+        )
+        # Only advance source watermarks after Telegram accepted the digest.
+        state["channels"].update(channel_updates)
 
         if replay_hours == 0:
             delivered_at = utc_now()

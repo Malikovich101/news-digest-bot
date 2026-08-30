@@ -5,4 +5,3 @@ __pycache__/
 
 # state.json is now committed (other AI super-fix), keep.tmp ignored
 state.json.tmp
-bot_offset.json
