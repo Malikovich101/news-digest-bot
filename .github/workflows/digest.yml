@@ -35,16 +35,6 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -v
-
       - name: Determine delivery slot
         id: slot
         env:
@@ -64,7 +54,37 @@ jobs:
           esac
           echo "slot_id=$(date -u +%F)-$suffix" >> "$GITHUB_OUTPUT"
 
+      - name: Skip an already completed slot
+        id: precheck
+        env:
+          SLOT_ID: ${{ steps.slot.outputs.slot_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          state = json.loads(Path("state.json").read_text(encoding="utf-8"))
+          completed = state.get("completed_slots", {}) or {}
+          skip = bool(os.environ.get("SLOT_ID")) and os.environ["SLOT_ID"] in completed
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"skip={'true' if skip else 'false'}\n")
+          print(f"slot={os.environ.get('SLOT_ID') or 'manual'} skip={skip}")
+          PY
+
+      - uses: actions/setup-python@v6
+        if: steps.precheck.outputs.skip != 'true'
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: steps.precheck.outputs.skip != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        if: steps.precheck.outputs.skip != 'true'
+        run: python -m unittest discover -s tests -v
+
       - name: Run digest script
+        if: steps.precheck.outputs.skip != 'true'
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}

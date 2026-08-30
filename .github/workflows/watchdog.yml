@@ -3,7 +3,7 @@ name: Digest Watchdog
 on:
   schedule:
     # Four checks per hour, away from :00 when GitHub Actions is busiest.
-    - cron: '7,22,37,52 * * * *'
+    - cron: '10,30,50 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -60,7 +60,7 @@ jobs:
               for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
                   expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
                   slot_id = f"{day.isoformat()}-{name}"
-                  if expected + datetime.timedelta(minutes=15) <= now <= expected + datetime.timedelta(hours=24):
+                  if expected + datetime.timedelta(minutes=45) <= now <= expected + datetime.timedelta(hours=24):
                       if slot_id not in completed:
                           candidates.append((expected, slot_id))
 
@@ -77,7 +77,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLOT_ID: ${{ steps.check.outputs.slot_id }}
         run: |
-          echo "Digest slot $SLOT_ID is missing; requesting a recovery run."
+          active=$(gh run list --workflow "News Digest" --repo "$GITHUB_REPOSITORY" \
+            --json status --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "pending")] | length')
+          if [ "$active" -gt 0 ]; then
+            echo "A News Digest run is already active or queued ($active); no duplicate recovery requested."
+            exit 0
+          fi
+          echo "Digest slot $SLOT_ID is missing; requesting one recovery run."
           gh workflow run "News Digest" --repo "$GITHUB_REPOSITORY" --ref main \
             -f replay_hours=0 -f slot_id="$SLOT_ID"
 
