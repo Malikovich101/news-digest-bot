@@ -2,7 +2,6 @@ name: Digest Watchdog
 
 on:
   schedule:
-    # Four checks per hour, away from :00 when GitHub Actions is busiest.
     - cron: '10,30,50 * * * *'
   workflow_dispatch:
 
@@ -17,13 +16,14 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 1
 
-      - name: Find a missing delivery slot
+      - name: Find missing slot
         id: check
         run: |
           python - <<'PY'
@@ -32,61 +32,69 @@ jobs:
           import os
           from pathlib import Path
 
-          state_path = Path("state.json")
-          state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-          completed = state.get("completed_slots", {}) or {}
           now = datetime.datetime.now(datetime.timezone.utc)
+          path = Path("state.json")
+          state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+          completed = state.get("completed_slots", {}) or {}
 
-          # v6 did not record slot ids. Infer its latest successful slot during
-          # the first deployment so it is not mistaken for a missed digest.
-          last_success = state.get("last_successful_run")
-          if not completed and last_success:
-              try:
-                  last_dt = datetime.datetime.fromisoformat(last_success.replace("Z", "+00:00"))
-                  legacy_slots = []
-                  for day in (last_dt.date() - datetime.timedelta(days=1), last_dt.date()):
-                      for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
-                          expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
-                          if expected <= last_dt:
-                              legacy_slots.append((expected, f"{day.isoformat()}-{name}"))
-                  if legacy_slots:
-                      completed[max(legacy_slots)[1]] = last_dt.isoformat()
-              except (TypeError, ValueError):
-                  pass
           candidates = []
-
-          # Keep yesterday's evening slot eligible after midnight as well.
           for day in (now.date() - datetime.timedelta(days=1), now.date()):
               for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
                   expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
                   slot_id = f"{day.isoformat()}-{name}"
-                  if expected + datetime.timedelta(minutes=45) <= now <= expected + datetime.timedelta(hours=24):
-                      if slot_id not in completed:
-                          candidates.append((expected, slot_id))
+                  # Give the scheduled workflow 45 minutes before recovery.
+                  # Do not recover a slot older than 24 hours.
+                  if expected + datetime.timedelta(minutes=45) <= now <= expected + datetime.timedelta(hours=24) and slot_id not in completed:
+                      candidates.append((expected, slot_id))
 
           candidates.sort()
           slot_id = candidates[0][1] if candidates else ""
-          print(f"now={now.isoformat()} completed={len(completed)} missing_slot={slot_id or 'none'}")
+          print(f"now={now.isoformat()} missing={slot_id or 'none'} completed={len(completed)}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"slot_id={slot_id}\n")
           PY
 
-      - name: Trigger only the missing slot
+      - name: Check for stale active runs
+        id: active
         if: steps.check.outputs.slot_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run list --workflow "News Digest" --repo "$GITHUB_REPOSITORY" --json databaseId,status,createdAt,updatedAt --limit 10 > /tmp/runs.json
+          python - <<'PY'
+          import datetime, json, os
+          rows = json.load(open('/tmp/runs.json', encoding='utf-8'))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          stale = 0
+          active = 0
+          for row in rows:
+              if row.get('status') in {'queued','in_progress','pending'}:
+                  active += 1
+                  updated = datetime.datetime.fromisoformat(row['updatedAt'].replace('Z','+00:00'))
+                  if now - updated > datetime.timedelta(minutes=15):
+                      stale = row['databaseId']
+                      break
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'active={active}\n')
+              output.write(f'stale_run={stale}\n')
+          print(f'active={active} stale_run={stale or "none"}')
+          PY
+
+      - name: Cancel stale digest run
+        if: steps.active.outputs.stale_run != '0' && steps.active.outputs.stale_run != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh run cancel "${{ steps.active.outputs.stale_run }}" --repo "$GITHUB_REPOSITORY"
+
+      - name: Trigger missing slot
+        if: steps.check.outputs.slot_id != '' && (steps.active.outputs.active == '0' || steps.active.outputs.stale_run != '0')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLOT_ID: ${{ steps.check.outputs.slot_id }}
         run: |
-          active=$(gh run list --workflow "News Digest" --repo "$GITHUB_REPOSITORY" \
-            --json status --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "pending")] | length')
-          if [ "$active" -gt 0 ]; then
-            echo "A News Digest run is already active or queued ($active); no duplicate recovery requested."
-            exit 0
-          fi
-          echo "Digest slot $SLOT_ID is missing; requesting one recovery run."
-          gh workflow run "News Digest" --repo "$GITHUB_REPOSITORY" --ref main \
-            -f replay_hours=0 -f slot_id="$SLOT_ID"
+          echo "Recovering missing digest slot $SLOT_ID"
+          gh workflow run "News Digest" --repo "$GITHUB_REPOSITORY" --ref main -f slot_id="$SLOT_ID"
 
-      - name: Log healthy status
+      - name: Healthy
         if: steps.check.outputs.slot_id == ''
-        run: echo "All eligible digest slots have completed."
+        run: echo "No eligible missing digest slot."
