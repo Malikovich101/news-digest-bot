@@ -33,5 +33,13 @@ class CurrentPipelineRegressionTests(unittest.TestCase):
         state=digest.migrate_state({"pending_posts":{"@news:1":{"id":"@news:1","collected_at":digest.utc_now().isoformat()}}})
         self.assertIn("@news:1", state["pending_posts"])
 
+    def test_digest_output_is_chronological(self):
+        posts = [
+            {"id":"@news:2","channel":"@news","message_id":2,"date":"2026-08-31T12:00:00+00:00","text":"Newer","url":"https://t.me/news/2"},
+            {"id":"@news:1","channel":"@news","message_id":1,"date":"2026-08-31T10:00:00+00:00","text":"Older","url":"https://t.me/news/1"},
+        ]
+        posts.sort(key=lambda post: digest.parse_datetime(post["date"]))
+        self.assertEqual([post["id"] for post in posts], ["@news:1", "@news:2"])
+
 
 if __name__ == "__main__": unittest.main()
