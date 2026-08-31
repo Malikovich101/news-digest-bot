@@ -250,7 +250,12 @@ def render_post(post):
 
 
 def format_digest(posts, stats, semantic_duplicates, confirmed_ads=0, ai_unavailable=False):
-    lines = ["❗❗❗❗❗❗", "🗞 Оригинальные новости", f"📊 Постов с текстом: {stats['source_posts']}; явной рекламы: {stats['ads']}; проверено Gemini: {stats.get('ad_review', 0)}; рекламы подтверждено Gemini: {confirmed_ads}; отсеяно коротких: {stats['short']}; точных повторов: {stats['python_duplicates']}; смысловых повторов: {semantic_duplicates}; оригинальных публикаций: {len(posts)}", "Каждый текст ниже — исходная публикация канала без пересказа и сокращения."]
+    lines = [
+        "❗❗❗❗❗❗",
+        "🗞 Оригинальные новости",
+        f"📊 Постов с текстом: {stats['source_posts']}; явной рекламы: {stats['ads']}; проверено Gemini: {stats.get('ad_review', 0)}; рекламы подтверждено Gemini: {confirmed_ads}; отсеяно коротких: {stats['short']}; точных повторов: {stats['python_duplicates']}; смысловых повторов: {semantic_duplicates}; оригинальных публикаций: {len(posts)}",
+        "Каждый текст ниже — исходная публикация канала без пересказа и сокращения.",
+    ]
     if ai_unavailable:
         lines.append("⚠️ Gemini недоступен: отправлены безопасные детерминированные кандидаты без AI-дедупликации.")
     lines.extend(render_post(post) for post in posts)
@@ -289,7 +294,16 @@ def require_environment():
 
 def migrate_state(raw):
     raw = raw if isinstance(raw, dict) else {}
-    return {"version": 8, "channels": raw.get("channels", {}), "pending_posts": raw.get("pending_posts", {}) or {}, "delivered_ids": list(dict.fromkeys(raw.get("delivered_ids", [])))[-MAX_DELIVERED_IDS:], "delivery_receipts": raw.get("delivery_receipts", {}) or {}, "recent_news": raw.get("recent_news", []) or [], "last_successful_run": raw.get("last_successful_run"), "completed_slots": raw.get("completed_slots", {}) or {}}
+    return {
+        "version": 8,
+        "channels": raw.get("channels", {}),
+        "pending_posts": raw.get("pending_posts", {}) or {},
+        "delivered_ids": list(dict.fromkeys(raw.get("delivered_ids", [])))[-MAX_DELIVERED_IDS:],
+        "delivery_receipts": raw.get("delivery_receipts", {}) or {},
+        "recent_news": raw.get("recent_news", []) or [],
+        "last_successful_run": raw.get("last_successful_run"),
+        "completed_slots": raw.get("completed_slots", {}) or {},
+    }
 
 
 def prune_recent_news(recent_news, now):
@@ -307,10 +321,27 @@ def prune_recent_news(recent_news, now):
 
 
 def prune_state(state, now):
-    state["pending_posts"] = {key: value for key, value in (state.get("pending_posts", {}) or {}).items() if isinstance(value, dict) and parse_datetime(value.get("collected_at"), None) and parse_datetime(value.get("collected_at"), None) >= now - timedelta(hours=48)}
-    state["delivery_receipts"] = {key: value for key, value in (state.get("delivery_receipts", {}) or {}).items() if isinstance(value, dict) and parse_datetime(value.get("sent_at"), None) and parse_datetime(value.get("sent_at"), None) >= now - timedelta(hours=72)}
+    state["pending_posts"] = {
+        key: value
+        for key, value in (state.get("pending_posts", {}) or {}).items()
+        if isinstance(value, dict)
+        and parse_datetime(value.get("collected_at"), None)
+        and parse_datetime(value.get("collected_at"), None) >= now - timedelta(hours=48)
+    }
+    state["delivery_receipts"] = {
+        key: value
+        for key, value in (state.get("delivery_receipts", {}) or {}).items()
+        if isinstance(value, dict)
+        and parse_datetime(value.get("sent_at"), None)
+        and parse_datetime(value.get("sent_at"), None) >= now - timedelta(hours=72)
+    }
     state["recent_news"] = prune_recent_news(state.get("recent_news", []), now)
-    state["completed_slots"] = {slot: completed_at for slot, completed_at in (state.get("completed_slots", {}) or {}).items() if parse_datetime(completed_at, None) and parse_datetime(completed_at, None) >= now - timedelta(days=7)}
+    state["completed_slots"] = {
+        slot: completed_at
+        for slot, completed_at in (state.get("completed_slots", {}) or {}).items()
+        if parse_datetime(completed_at, None)
+        and parse_datetime(completed_at, None) >= now - timedelta(days=7)
+    }
     state["version"] = 8
     return state
 
@@ -380,7 +411,10 @@ class DigestPipeline:
         return posts, updates, failed
 
     def send_telegram(self, token, chat_id, text, state, posts, rendered_chunks=None):
-        records = rendered_chunks or [{"id": chunk_checkpoint_id(chunk), "text": chunk, "post_ids": [post["id"] for post in posts if post["url"] in chunk]} for chunk in telegram_chunks(text)]
+        records = rendered_chunks or [
+            {"id": chunk_checkpoint_id(chunk), "text": chunk, "post_ids": [post["id"] for post in posts if post["url"] in chunk]}
+            for chunk in telegram_chunks(text)
+        ]
         receipts = state.setdefault("delivery_receipts", {})
         for index, record in enumerate(records):
             checkpoint = record["id"]
@@ -389,7 +423,11 @@ class DigestPipeline:
             last_error = None
             for attempt in range(RETRY_ATTEMPTS):
                 try:
-                    response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": record["text"]}, timeout=30)
+                    response = requests.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        data={"chat_id": chat_id, "text": record["text"]},
+                        timeout=30,
+                    )
                     response.raise_for_status()
                     payload = response.json()
                     if not payload.get("ok"):
@@ -440,6 +478,8 @@ class DigestPipeline:
                 print(f"Gemini optional processing failed: {error}")
         elif posts:
             ai_unavailable = True
+        # Delivery order must always be chronological, irrespective of Telegram's reverse retrieval order.
+        posts.sort(key=lambda post: parse_datetime(post.get("date"), datetime.min.replace(tzinfo=timezone.utc)))
         if posts:
             for post in posts:
                 state.setdefault("pending_posts", {})[post["id"]] = {**post, "collected_at": started_at.isoformat()}
