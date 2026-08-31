@@ -2,9 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import requests
-
-from digest import MODELS, generate_json, is_probable_ad, is_suspicious_ad, filter_and_deduplicate, review_suspicious_ads, candidate_clusters, format_digest, telegram_chunks
+from digest import MODELS, generate_json, is_probable_ad, is_suspicious_ad, filter_and_deduplicate, review_suspicious_ads, format_digest, telegram_chunks
 
 
 def post(text, source_id="@test:1", url="https://t.me/test/1"):
@@ -25,10 +23,7 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertTrue(is_suspicious_ad(kept[0]["text"]))
 
     def test_literal_repost_with_different_link_and_signature_is_filtered(self):
-        posts = [
-            post("Компания представила новый продукт. https://example.com/a @channelone", "@one:1"),
-            post("Компания представила новый продукт. https://example.com/b @channeltwo", "@two:2"),
-        ]
+        posts = [post("Компания представила новый продукт. https://example.com/a @channelone", "@one:1"), post("Компания представила новый продукт. https://example.com/b @channeltwo", "@two:2")]
         kept, stats = filter_and_deduplicate(posts)
         self.assertEqual([item["id"] for item in kept], ["@one:1"])
         self.assertEqual(stats["python_duplicates"], 1)
@@ -41,12 +36,6 @@ class DigestUtilityTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in kept], ["@two:2"])
         self.assertEqual(confirmed, 1)
         self.assertEqual(calls, 1)
-
-    def test_candidate_clusters_find_reposts(self):
-        posts = [post("Telegram вновь появился в App Store, доступ восстановлен.", "@one:1"), post("Telegram вернули в App Store — доступ восстановлен.", "@two:2"), post("Telegram восстановили в AppStore.", "@three:3"), post("Совершенно другая новость о космосе и телескопе.", "@four:4")]
-        clusters = []
-        # The simplified runtime intentionally no longer depends on candidate clustering.
-        self.assertEqual(clusters, [])
 
     def test_format_keeps_original_text(self):
         original = "Первая строка\n\n  Вторая строка без изменений."
