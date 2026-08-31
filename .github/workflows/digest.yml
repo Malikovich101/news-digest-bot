@@ -8,19 +8,14 @@ on:
     - cron: '5 15 * * *'
   workflow_dispatch:
     inputs:
-      replay_hours:
-        description: 'Повторно собрать новости за N последних часов (0 — только новые)'
-        required: false
-        default: '0'
-        type: string
       slot_id:
-        description: 'Идентификатор пропущенного слота; задаётся watchdog автоматически'
+        description: 'Идентификатор слота (оставьте пустым для ручного запуска)'
         required: false
         default: ''
         type: string
 
 concurrency:
-  group: news-digest-repository-state
+  group: news-digest
   cancel-in-progress: false
 
 permissions:
@@ -29,6 +24,7 @@ permissions:
 jobs:
   run-digest:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
         with:
@@ -54,37 +50,17 @@ jobs:
           esac
           echo "slot_id=$(date -u +%F)-$suffix" >> "$GITHUB_OUTPUT"
 
-      - name: Skip an already completed slot
-        id: precheck
-        env:
-          SLOT_ID: ${{ steps.slot.outputs.slot_id }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          state = json.loads(Path("state.json").read_text(encoding="utf-8"))
-          completed = state.get("completed_slots", {}) or {}
-          skip = bool(os.environ.get("SLOT_ID")) and os.environ["SLOT_ID"] in completed
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"skip={'true' if skip else 'false'}\n")
-          print(f"slot={os.environ.get('SLOT_ID') or 'manual'} skip={skip}")
-          PY
-
       - uses: actions/setup-python@v6
-        if: steps.precheck.outputs.skip != 'true'
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        if: steps.precheck.outputs.skip != 'true'
-        run: pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt
 
       - name: Run unit tests
-        if: steps.precheck.outputs.skip != 'true'
         run: python -m unittest discover -s tests -v
 
       - name: Run digest script
-        if: steps.precheck.outputs.skip != 'true'
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
@@ -92,41 +68,26 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          REPLAY_HOURS: ${{ inputs.replay_hours || '0' }}
           DIGEST_SLOT_ID: ${{ steps.slot.outputs.slot_id }}
         run: python digest.py
 
-      - name: Commit updated state.json
+      - name: Commit updated state
         if: always()
         run: |
           if [ -f state.json ]; then
-            # normalize delivered_chunks to avoid unbounded growth in commits
-            python - <<'PY'
-          import json
-          from pathlib import Path
-          p = Path("state.json")
-          if p.exists():
-              s = json.loads(p.read_text(encoding="utf-8"))
-              # keep file tidy - clear delivered_chunks after successful send (optional)
-              # don't clear pending/delivered_ids - they are needed for dedup
-              s["delivered_chunks"] = []
-              p.write_text(json.dumps(s, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-          PY
-          fi
-          if [ -n "$(git status --porcelain state.json run_history.jsonl)" ]; then
             git config user.name "news-digest-bot"
             git config user.email "actions@users.noreply.github.com"
             git add state.json run_history.jsonl
-            git commit -m "chore: update runtime state [skip ci]"
-            for attempt in 1 2 3; do
-              git pull --rebase origin main && git push && exit 0
-              git rebase --abort || true
-              sleep "$attempt"
-            done
-            echo "Unable to persist runtime state after retries." >&2
-            exit 1
-          else
-            echo "state.json unchanged, nothing to commit."
+            if ! git diff --staged --quiet; then
+              git commit -m "chore: update runtime state [skip ci]"
+              for attempt in 1 2 3; do
+                git pull --rebase origin main && git push && exit 0
+                git rebase --abort || true
+                sleep "$attempt"
+              done
+              echo "Unable to persist runtime state after retries." >&2
+              exit 1
+            fi
           fi
 
       - name: Notify on failure
@@ -135,6 +96,6 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+          curl --fail-with-body --max-time 20 -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
-            -d text="⚠️ News Digest: запуск завершился ошибкой. Смотри Actions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            --data-urlencode text="⚠️ News Digest: запуск завершился ошибкой. Смотри Actions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
