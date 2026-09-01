@@ -54,6 +54,7 @@ class CurrentPipelineRegressionTests(unittest.TestCase):
 
         with patch("digest.require_environment"), \
              patch("digest.load_channels", return_value=["@news"]), \
+             patch("digest.StringSession", return_value=object()), \
              patch("digest.TelegramClient"), \
              patch.object(pipeline, "load_state", return_value=state), \
              patch.object(pipeline, "collect_posts", return_value=([], {"@news": {"last_message_id": 1, "last_checked_at": "2026-09-01T12:00:00+00:00"}}, [])), \
@@ -62,7 +63,7 @@ class CurrentPipelineRegressionTests(unittest.TestCase):
             with patch.dict(os.environ, {
                 "TG_API_ID":"1",
                 "TG_API_HASH":"h",
-                "TG_SESSION_STRING":"valid-test-placeholder",
+                "TG_SESSION_STRING":"test-session",
                 "TG_BOT_TOKEN":"t",
                 "TG_CHAT_ID":"c",
             }, clear=True):
