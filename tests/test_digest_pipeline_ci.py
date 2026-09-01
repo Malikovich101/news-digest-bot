@@ -1,3 +1,4 @@
+import os
 import unittest
 from datetime import timedelta
 from unittest.mock import patch
@@ -51,15 +52,16 @@ class CurrentPipelineRegressionTests(unittest.TestCase):
             sent.extend(post["id"] for post in posts)
             for post in posts:
                 current_state["pending_posts"].pop(post["id"], None)
-        with patch("digest.require_environment"), patch("digest.load_channels", return_value=[]), patch("digest.TelegramClient") as telegram_client, patch.object(pipeline, "load_state", return_value=state), patch.object(pipeline, "send_telegram", side_effect=fake_send), patch.object(pipeline, "save_state"), patch("digest.utc_now", side_effect=[digest.parse_datetime("2026-09-01T12:00:00+00:00")] * 20):
+        with patch("digest.require_environment"), patch("digest.load_channels", return_value=["@news"]), patch("digest.TelegramClient") as telegram_client, patch.object(pipeline, "load_state", return_value=state), patch.object(pipeline, "collect_posts", return_value=([], {"@news": {"last_message_id": 1, "last_checked_at": "2026-09-01T12:00:00+00:00"}}, [])), patch.object(pipeline, "send_telegram", side_effect=fake_send), patch.object(pipeline, "save_state"):
             class Context:
                 def __enter__(self): return Client()
                 def __exit__(self, *args): return False
             telegram_client.return_value = Context()
-            with patch.dict(__import__("os").environ, {"TG_API_ID":"1", "TG_API_HASH":"h", "TG_SESSION_STRING":"s", "TG_BOT_TOKEN":"t", "TG_CHAT_ID":"c"}, clear=True):
+            with patch.dict(os.environ, {"TG_API_ID":"1", "TG_API_HASH":"h", "TG_SESSION_STRING":"s", "TG_BOT_TOKEN":"t", "TG_CHAT_ID":"c"}, clear=True):
                 result = pipeline.run()
         self.assertEqual(result["status"], "success")
         self.assertEqual(sent, ["@news:1"])
+        self.assertNotIn("@news:1", state["pending_posts"])
 
     def test_digest_output_is_chronological(self):
         posts = [
@@ -70,4 +72,5 @@ class CurrentPipelineRegressionTests(unittest.TestCase):
         self.assertEqual([post["id"] for post in posts], ["@news:1", "@news:2"])
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()
