@@ -44,7 +44,6 @@ jobs:
               for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
                   expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
                   slot_id = f"{day.isoformat()}-{name}"
-                  # Give the scheduled run 45 minutes to complete, then make the slot eligible for recovery.
                   if expected + datetime.timedelta(minutes=45) <= now and slot_id not in completed:
                       slots.append((expected, slot_id))
 
