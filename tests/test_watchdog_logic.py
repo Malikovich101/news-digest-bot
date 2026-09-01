@@ -36,13 +36,16 @@ class WatchdogLogicTests(unittest.TestCase):
         }
         self.assertEqual(find_oldest_missing_slot(now, completed), "2026-09-01-evening")
 
-    def test_completed_slot_is_never_returned(self):
+    def test_completed_slot_is_never_returned_when_no_other_slot_is_missing(self):
         now = datetime.datetime(2026, 9, 1, 22, 0, tzinfo=UTC)
-        completed = {
-            "2026-09-01-morning": "2026-09-01T05:00:00+00:00",
-            "2026-09-01-day": "2026-09-01T10:00:00+00:00",
-            "2026-09-01-evening": "2026-09-01T20:00:00+00:00",
-        }
+        completed = {}
+        start_day = now.date() - datetime.timedelta(days=3)
+        for offset in range(4):
+            day = start_day + datetime.timedelta(days=offset)
+            for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
+                expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=UTC)
+                if expected + datetime.timedelta(minutes=45) <= now:
+                    completed[f"{day.isoformat()}-{name}"] = now.isoformat()
         self.assertEqual(find_oldest_missing_slot(now, completed), "")
 
 
