@@ -38,8 +38,8 @@ jobs:
           completed = state.get("completed_slots", {}) or {}
 
           slots = []
-          start_day = now.date() - datetime.timedelta(days=2)
-          for offset in range(4):
+          start_day = now.date() - datetime.timedelta(days=3)
+          for offset in range(5):
               day = start_day + datetime.timedelta(days=offset)
               for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
                   expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
@@ -54,13 +54,13 @@ jobs:
               output.write(f"slot_id={slot_id}\n")
           PY
 
-      - name: Check active digest runs
+      - name: Inspect active digest runs
         id: active
         if: steps.check.outputs.slot_id != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh run list --workflow "News Digest" --repo "$GITHUB_REPOSITORY" --json databaseId,status,createdAt,updatedAt --limit 20 > /tmp/runs.json
+          gh run list --workflow "News Digest" --repo "$GITHUB_REPOSITORY" --json databaseId,status,createdAt,updatedAt,displayTitle --limit 100 > /tmp/runs.json
           python - <<'PY'
           import datetime
           import json
@@ -92,7 +92,7 @@ jobs:
         run: gh run cancel "${{ steps.active.outputs.stale_run }}" --repo "$GITHUB_REPOSITORY"
 
       - name: Trigger missing slot
-        if: steps.check.outputs.slot_id != '' && (steps.active.outputs.active == '0' || steps.active.outputs.stale_run != '0')
+        if: steps.check.outputs.slot_id != '' && steps.active.outputs.active == '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLOT_ID: ${{ steps.check.outputs.slot_id }}
