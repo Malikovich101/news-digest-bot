@@ -2,7 +2,6 @@ name: News Digest
 
 on:
   schedule:
-    # 08:05, 14:05 and 20:05 Europe/Perm (UTC+5).
     - cron: '5 3 * * *'
     - cron: '5 9 * * *'
     - cron: '5 15 * * *'
@@ -13,10 +12,6 @@ on:
         required: false
         default: ''
         type: string
-
-concurrency:
-  group: news-digest
-  cancel-in-progress: false
 
 permissions:
   contents: write
