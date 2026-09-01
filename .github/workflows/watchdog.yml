@@ -23,7 +23,7 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Find missing slot
+      - name: Find oldest missing slot
         id: check
         run: |
           python - <<'PY'
@@ -37,47 +37,53 @@ jobs:
           state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
           completed = state.get("completed_slots", {}) or {}
 
-          candidates = []
-          for day in (now.date() - datetime.timedelta(days=1), now.date()):
+          slots = []
+          start_day = now.date() - datetime.timedelta(days=2)
+          for offset in range(4):
+              day = start_day + datetime.timedelta(days=offset)
               for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
                   expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
                   slot_id = f"{day.isoformat()}-{name}"
-                  # Give the scheduled workflow 45 minutes before recovery.
-                  # Do not recover a slot older than 24 hours.
-                  if expected + datetime.timedelta(minutes=45) <= now <= expected + datetime.timedelta(hours=24) and slot_id not in completed:
-                      candidates.append((expected, slot_id))
+                  # Give the scheduled run 45 minutes to complete, then make the slot eligible for recovery.
+                  if expected + datetime.timedelta(minutes=45) <= now and slot_id not in completed:
+                      slots.append((expected, slot_id))
 
-          candidates.sort()
-          slot_id = candidates[0][1] if candidates else ""
+          slots.sort()
+          slot_id = slots[0][1] if slots else ""
           print(f"now={now.isoformat()} missing={slot_id or 'none'} completed={len(completed)}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"slot_id={slot_id}\n")
           PY
 
-      - name: Check for stale active runs
+      - name: Check active digest runs
         id: active
         if: steps.check.outputs.slot_id != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh run list --workflow "News Digest" --repo "$GITHUB_REPOSITORY" --json databaseId,status,createdAt,updatedAt --limit 10 > /tmp/runs.json
+          gh run list --workflow "News Digest" --repo "$GITHUB_REPOSITORY" --json databaseId,status,createdAt,updatedAt --limit 20 > /tmp/runs.json
           python - <<'PY'
-          import datetime, json, os
+          import datetime
+          import json
+          import os
+
           rows = json.load(open('/tmp/runs.json', encoding='utf-8'))
           now = datetime.datetime.now(datetime.timezone.utc)
+          active = []
           stale = 0
-          active = 0
+
           for row in rows:
-              if row.get('status') in {'queued','in_progress','pending'}:
-                  active += 1
-                  updated = datetime.datetime.fromisoformat(row['updatedAt'].replace('Z','+00:00'))
-                  if now - updated > datetime.timedelta(minutes=15):
-                      stale = row['databaseId']
-                      break
+              if row.get('status') not in {'queued','in_progress','pending'}:
+                  continue
+              active.append(row['databaseId'])
+              updated = datetime.datetime.fromisoformat(row['updatedAt'].replace('Z','+00:00'))
+              if now - updated > datetime.timedelta(minutes=15) and not stale:
+                  stale = row['databaseId']
+
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write(f'active={active}\n')
+              output.write(f'active={len(active)}\n')
               output.write(f'stale_run={stale}\n')
-          print(f'active={active} stale_run={stale or "none"}')
+          print(f'active={len(active)} stale_run={stale or "none"}')
           PY
 
       - name: Cancel stale digest run
