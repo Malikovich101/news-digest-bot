@@ -7,8 +7,8 @@ UTC = datetime.timezone.utc
 
 def find_oldest_missing_slot(now, completed):
     slots = []
-    start_day = now.date() - datetime.timedelta(days=2)
-    for offset in range(4):
+    start_day = now.date() - datetime.timedelta(days=3)
+    for offset in range(5):
         day = start_day + datetime.timedelta(days=offset)
         for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
             expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=UTC)
