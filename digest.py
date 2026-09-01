@@ -46,8 +46,6 @@ PROMO_PATTERNS = (
     r"\bкуп\w*\b", r"\bзаказ\w*\b", r"\bрегистр\w*\b",
 )
 URL_RE = re.compile(r"https?://\S+|t\.me/\S+", re.IGNORECASE)
-WORD_RE = re.compile(r"[a-zа-яё0-9]{3,}", re.IGNORECASE)
-COMMON_WORDS = {"это", "как", "что", "для", "или", "при", "после", "через", "также", "будет", "были", "была", "есть", "еще", "новый", "новая", "новости", "сообщил", "сообщили", "компания", "сегодня", "теперь", "который"}
 
 
 def utc_now():
@@ -128,7 +126,10 @@ def generate_json(client, prompt):
                 response = client.models.generate_content(
                     model=model,
                     contents=prompt,
-                    config={"response_mime_type": "application/json", "http_options": {"timeout": AI_CALL_TIMEOUT_SECONDS * 1000}},
+                    config={
+                        "response_mime_type": "application/json",
+                        "http_options": {"timeout": AI_CALL_TIMEOUT_SECONDS * 1000},
+                    },
                 )
                 return extract_json_object(response.text)
             except Exception as error:
@@ -478,8 +479,10 @@ class DigestPipeline:
                 print(f"Gemini optional processing failed: {error}")
         elif posts:
             ai_unavailable = True
+
         # Delivery order must always be chronological, irrespective of Telegram's reverse retrieval order.
         posts.sort(key=lambda post: parse_datetime(post.get("date"), datetime.min.replace(tzinfo=timezone.utc)))
+
         if posts:
             for post in posts:
                 state.setdefault("pending_posts", {})[post["id"]] = {**post, "collected_at": started_at.isoformat()}
