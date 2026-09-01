@@ -17,41 +17,46 @@ def find_oldest_missing_recent_slot(now, completed):
     return slots[0][1] if slots else ""
 
 
+def completed_recent_slots(now):
+    completed = {}
+    for day in (now.date() - datetime.timedelta(days=1), now.date()):
+        for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
+            expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=UTC)
+            if expected + datetime.timedelta(minutes=45) <= now:
+                completed[f"{day.isoformat()}-{name}"] = now.isoformat()
+    return completed
+
+
 class WatchdogLogicTests(unittest.TestCase):
     def test_evening_slot_is_recovered_late_same_day(self):
         now = datetime.datetime(2026, 9, 1, 21, 50, tzinfo=UTC)
         completed = {
-            "2026-09-01-morning": "2026-09-01T05:03:00+00:00",
-            "2026-09-01-day": "2026-09-01T10:04:00+00:00",
+            "2026-08-31-morning": now.isoformat(),
+            "2026-08-31-day": now.isoformat(),
+            "2026-08-31-evening": now.isoformat(),
+            "2026-09-01-morning": now.isoformat(),
+            "2026-09-01-day": now.isoformat(),
         }
         self.assertEqual(find_oldest_missing_recent_slot(now, completed), "2026-09-01-evening")
 
-    def test_yesterday_missing_slot_is_recovered(self):
+    def test_oldest_missing_recent_slot_is_recovered_first(self):
         now = datetime.datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
         completed = {
-            "2026-09-02-morning": "2026-09-02T05:00:00+00:00",
-            "2026-09-02-day": "2026-09-02T09:00:00+00:00",
+            "2026-08-31-morning": now.isoformat(),
+            "2026-08-31-day": now.isoformat(),
+            "2026-08-31-evening": now.isoformat(),
+            "2026-09-02-morning": now.isoformat(),
         }
-        self.assertEqual(find_oldest_missing_recent_slot(now, completed), "2026-09-01-evening")
+        self.assertEqual(find_oldest_missing_recent_slot(now, completed), "2026-09-01-morning")
 
     def test_slot_older_than_yesterday_is_not_recovered(self):
         now = datetime.datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
-        completed = {
-            "2026-09-02-morning": "2026-09-02T05:00:00+00:00",
-            "2026-09-02-day": "2026-09-02T09:00:00+00:00",
-            "2026-09-02-evening": "2026-09-02T15:00:00+00:00",
-            "2026-09-03-morning": "2026-09-03T05:00:00+00:00",
-            "2026-09-03-day": "2026-09-03T09:00:00+00:00",
-        }
+        completed = completed_recent_slots(now)
         self.assertEqual(find_oldest_missing_recent_slot(now, completed), "")
 
     def test_completed_slots_are_skipped(self):
         now = datetime.datetime(2026, 9, 1, 22, 0, tzinfo=UTC)
-        completed = {
-            "2026-09-01-morning": "2026-09-01T05:00:00+00:00",
-            "2026-09-01-day": "2026-09-01T10:00:00+00:00",
-            "2026-09-01-evening": "2026-09-01T15:00:00+00:00",
-        }
+        completed = completed_recent_slots(now)
         self.assertEqual(find_oldest_missing_recent_slot(now, completed), "")
 
 
