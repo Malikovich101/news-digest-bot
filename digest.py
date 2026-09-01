@@ -36,6 +36,7 @@ TELEGRAM_MESSAGE_LIMIT = 3900
 CHANNEL_FETCH_DELAY_SECONDS = 0.5
 AI_MAX_CALLS = 4
 AI_CALL_TIMEOUT_SECONDS = 45
+MAX_PENDING_POSTS = 2_000
 
 AD_MARKERS = (
     "#реклама", "erid", "промокод", "рекламная интеграция",
@@ -295,10 +296,18 @@ def require_environment():
 
 def migrate_state(raw):
     raw = raw if isinstance(raw, dict) else {}
+    pending_raw = raw.get("pending_posts", {}) or {}
+    if isinstance(pending_raw, dict) and len(pending_raw) > MAX_PENDING_POSTS:
+        pending_items = sorted(
+            pending_raw.items(),
+            key=lambda item: parse_datetime(item[1].get("collected_at"), datetime.min.replace(tzinfo=timezone.utc))
+            if isinstance(item[1], dict) else datetime.min.replace(tzinfo=timezone.utc),
+        )
+        pending_raw = dict(pending_items[-MAX_PENDING_POSTS:])
     return {
         "version": 8,
         "channels": raw.get("channels", {}),
-        "pending_posts": raw.get("pending_posts", {}) or {},
+        "pending_posts": pending_raw,
         "delivered_ids": list(dict.fromkeys(raw.get("delivered_ids", [])))[-MAX_DELIVERED_IDS:],
         "delivery_receipts": raw.get("delivery_receipts", {}) or {},
         "recent_news": raw.get("recent_news", []) or [],
@@ -325,9 +334,7 @@ def prune_state(state, now):
     state["pending_posts"] = {
         key: value
         for key, value in (state.get("pending_posts", {}) or {}).items()
-        if isinstance(value, dict)
-        and parse_datetime(value.get("collected_at"), None)
-        and parse_datetime(value.get("collected_at"), None) >= now - timedelta(hours=48)
+        if isinstance(value, dict) and value.get("id") and value.get("text") and value.get("url")
     }
     state["delivery_receipts"] = {
         key: value
