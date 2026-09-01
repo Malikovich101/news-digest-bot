@@ -39,7 +39,11 @@ jobs:
           DISPATCH_SLOT: ${{ inputs.slot_id }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "slot_id=$DISPATCH_SLOT" >> "$GITHUB_OUTPUT"
+            if [ -n "$DISPATCH_SLOT" ]; then
+              echo "slot_id=$DISPATCH_SLOT" >> "$GITHUB_OUTPUT"
+            else
+              echo "slot_id=$(date -u +%F)-manual" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
           case "$SCHEDULE" in
