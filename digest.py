@@ -469,15 +469,27 @@ class DigestPipeline:
             collected, channel_updates, failed_channels = self.collect_posts(telegram_client, channels, state, utc_now())
         if failed_channels and len(failed_channels) == len(channels):
             raise RuntimeError("All configured channels failed to load")
-        posts, stats = filter_and_deduplicate(collected)
+
+        pending_posts = [dict(post) for post in state.get("pending_posts", {}).values() if isinstance(post, dict) and post.get("id") and post.get("text") and post.get("url")]
+        fresh_posts, stats = filter_and_deduplicate(collected)
+        posts = pending_posts + fresh_posts
+        seen_ids = set()
+        posts = [post for post in posts if not (post["id"] in seen_ids or seen_ids.add(post["id"]))]
+        stats["pending_retried"] = len(pending_posts)
+        stats["source_posts"] += len(pending_posts)
+
         ai_unavailable = False
         confirmed_ads = semantic_duplicates = 0
         gemini_calls = 0
         if posts and os.environ.get("GEMINI_API_KEY"):
             try:
                 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-                posts, confirmed_ads, calls = review_suspicious_ads(client, posts)
+                # Existing pending posts were already filtered before the previous delivery attempt.
+                # Only fresh posts require the expensive ad review; semantic dedup then sees the full retry set.
+                reviewed_fresh, confirmed_ads, calls = review_suspicious_ads(client, fresh_posts)
                 gemini_calls += calls
+                reviewed_ids = {post["id"] for post in reviewed_fresh}
+                posts = pending_posts + [post for post in fresh_posts if post["id"] in reviewed_ids]
                 if posts and gemini_calls < AI_MAX_CALLS:
                     posts, semantic_duplicates, calls = semantic_deduplicate(client, posts)
                     gemini_calls += calls
@@ -487,12 +499,12 @@ class DigestPipeline:
         elif posts:
             ai_unavailable = True
 
-        # Delivery order must always be chronological, irrespective of Telegram's reverse retrieval order.
         posts.sort(key=lambda post: parse_datetime(post.get("date"), datetime.min.replace(tzinfo=timezone.utc)))
 
         if posts:
             for post in posts:
-                state.setdefault("pending_posts", {})[post["id"]] = {**post, "collected_at": started_at.isoformat()}
+                existing = state.get("pending_posts", {}).get(post["id"], {})
+                state.setdefault("pending_posts", {})[post["id"]] = {**post, "collected_at": existing.get("collected_at", started_at.isoformat())}
             self.save_state(state)
             digest_text = format_digest(posts, stats, semantic_duplicates, confirmed_ads, ai_unavailable)
         else:
