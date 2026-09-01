@@ -23,7 +23,7 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Find oldest missing slot
+      - name: Find oldest missing recent slot
         id: check
         run: |
           python - <<'PY'
@@ -38,9 +38,8 @@ jobs:
           completed = state.get("completed_slots", {}) or {}
 
           slots = []
-          start_day = now.date() - datetime.timedelta(days=3)
-          for offset in range(5):
-              day = start_day + datetime.timedelta(days=offset)
+          # Recover only slots from the previous day and today.
+          for day in (now.date() - datetime.timedelta(days=1), now.date()):
               for name, hour in (("morning", 3), ("day", 9), ("evening", 15)):
                   expected = datetime.datetime.combine(day, datetime.time(hour, 5), tzinfo=datetime.timezone.utc)
                   slot_id = f"{day.isoformat()}-{name}"
@@ -54,7 +53,7 @@ jobs:
               output.write(f"slot_id={slot_id}\n")
           PY
 
-      - name: Inspect active digest runs
+      - name: Check active digest runs
         id: active
         if: steps.check.outputs.slot_id != ''
         env:
