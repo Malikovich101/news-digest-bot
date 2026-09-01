@@ -1,5 +1,6 @@
 import unittest
 from datetime import timedelta
+from unittest.mock import patch
 
 import digest
 
@@ -30,8 +31,35 @@ class CurrentPipelineRegressionTests(unittest.TestCase):
         self.assertEqual(state["recent_news"][0]["id"],"@news:1")
 
     def test_pending_posts_are_kept_for_retry(self):
-        state=digest.migrate_state({"pending_posts":{"@news:1":{"id":"@news:1","collected_at":digest.utc_now().isoformat()}}})
+        state=digest.migrate_state({"pending_posts":{"@news:1":{"id":"@news:1","collected_at":digest.utc_now().isoformat(),"text":"Retry me","url":"https://t.me/news/1"}}})
         self.assertIn("@news:1", state["pending_posts"])
+
+    def test_pending_posts_are_retried_before_fresh_posts(self):
+        pipeline = digest.DigestPipeline()
+        pending = {
+            "@news:1": {
+                "id": "@news:1", "channel": "@news", "message_id": 1,
+                "date": "2026-09-01T10:00:00+00:00", "text": "Retry me",
+                "url": "https://t.me/news/1", "collected_at": "2026-09-01T10:01:00+00:00",
+            }
+        }
+        state = {"version": 8, "channels": {}, "pending_posts": pending, "delivered_ids": [], "delivery_receipts": {}, "recent_news": [], "completed_slots": {}}
+        class Client:
+            def iter_messages(self, channel, min_id=0): return []
+        sent = []
+        def fake_send(token, chat_id, text, current_state, posts):
+            sent.extend(post["id"] for post in posts)
+            for post in posts:
+                current_state["pending_posts"].pop(post["id"], None)
+        with patch("digest.require_environment"), patch("digest.load_channels", return_value=[]), patch("digest.TelegramClient") as telegram_client, patch.object(pipeline, "load_state", return_value=state), patch.object(pipeline, "send_telegram", side_effect=fake_send), patch.object(pipeline, "save_state"), patch("digest.utc_now", side_effect=[digest.parse_datetime("2026-09-01T12:00:00+00:00")] * 20):
+            class Context:
+                def __enter__(self): return Client()
+                def __exit__(self, *args): return False
+            telegram_client.return_value = Context()
+            with patch.dict(__import__("os").environ, {"TG_API_ID":"1", "TG_API_HASH":"h", "TG_SESSION_STRING":"s", "TG_BOT_TOKEN":"t", "TG_CHAT_ID":"c"}, clear=True):
+                result = pipeline.run()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(sent, ["@news:1"])
 
     def test_digest_output_is_chronological(self):
         posts = [
